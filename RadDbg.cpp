@@ -468,7 +468,6 @@ Debugger::UserCommand Debugger::UserInputLoop(const DEBUG_EVENT& DebugEv, const 
             _tprintf(_T("next    - step over to new line\n"));
             _tprintf(_T("step    - step in to new line\n"));
             _tprintf(_T("return  - step out to new line\n"));
-            _tprintf(_T("exit    - exit debugger\n"));
             _tprintf(_T("context - show registers\n"));
             _tprintf(_T("stack   - show stacktrace\n"));
             _tprintf(_T("source  - show sourcecode\n"));
@@ -476,6 +475,8 @@ Debugger::UserCommand Debugger::UserInputLoop(const DEBUG_EVENT& DebugEv, const 
             _tprintf(_T("bp add <symbol>     - add a breakpoint\n"));
             _tprintf(_T("threads - list threads\n"));
             _tprintf(_T("thread <thread_id>  - switch threads\n"));
+            _tprintf(_T("detach  - detach debugger\n"));
+            _tprintf(_T("exit    - exit debugger\n"));
         }
         else if (args[0] == TEXT("break"))
             DebugBreak();
@@ -527,8 +528,6 @@ Debugger::UserCommand Debugger::UserInputLoop(const DEBUG_EVENT& DebugEv, const 
 
             return UserCommand::CONT;
         }
-        else if (args[0] == TEXT("exit"))
-            return UserCommand::EXIT;
         else if (args[0] == TEXT("context"))
         {
             BOOL bIsWow64;
@@ -763,6 +762,13 @@ Debugger::UserCommand Debugger::UserInputLoop(const DEBUG_EVENT& DebugEv, const 
                 CHECK(SymEnumSymbols(hProcess, 0, Mask, EnumSymProc, &espdata), continue);
             }
         }
+        else if (args[0] == TEXT("detach"))
+        {
+            CHECK(DebugActiveProcessStop(DebugEv.dwProcessId), continue);
+            return UserCommand::EXIT;
+        }
+        else if (args[0] == TEXT("exit"))
+            return UserCommand::EXIT;
         else
             _tprintf(_T("Unknown command\n"));
     }
@@ -1239,6 +1245,13 @@ BOOL WINAPI ConsoleCtrlHandler(_In_ DWORD dwCtrlType)
     }
 }
 
+bool ParseProcessId(LPCTSTR pStr, DWORD* ppid)
+{
+    TCHAR* pend = nullptr;
+    *ppid = std::_tcstoul(pStr, &pend, 10);
+    return *pend == TEXT('\0');
+}
+
 int _tmain(const int argc, const TCHAR* argv[])
 {
     SetConsoleCtrlHandler(ConsoleCtrlHandler, TRUE);
@@ -1246,9 +1259,16 @@ int _tmain(const int argc, const TCHAR* argv[])
     Debugger dbg;
     g_pdbg = &dbg;
 
-    StartDebugProcess(argc - 1, argv + 1);
+    DWORD pid = 0;
+    if (argc == 2 && ParseProcessId(argv[1], &pid))
+    {
+        CHECK(DebugActiveProcess(pid), return EXIT_FAILURE);
+    }
+    else if (!StartDebugProcess(argc - 1, argv + 1))
+        return EXIT_FAILURE;
+
     dbg.DoEventLoop();
 
     g_pdbg = nullptr;
-    return ERROR_SUCCESS;
+    return EXIT_SUCCESS;
 }
