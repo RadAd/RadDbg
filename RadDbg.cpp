@@ -524,6 +524,8 @@ Debugger::UserCommand Debugger::UserInputLoop(const DEBUG_EVENT& DebugEv, const 
             // Step-out
             std::vector<STACKFRAME64> stack = GetCallstack(hProcess, hThread);
 
+            // TODO Add breakpoint for current thread
+
             AddTempBreakpoint(hProcess, stack.front().AddrReturn.Offset);
 
             return UserCommand::CONT;
@@ -665,7 +667,13 @@ Debugger::UserCommand Debugger::UserInputLoop(const DEBUG_EVENT& DebugEv, const 
                 if (it == m_Threads.end())
                     _tprintf(_T("Thread not found\n"));
                 else
+                {
                     hThread = it->second;
+
+                    std::vector<STACKFRAME64> stack = GetCallstack(hProcess, hThread);
+
+                    ShowStackFrame(hProcess, stack.front().AddrPC.Offset);
+                }
             }
             else
                 _tprintf(_T("Usage: thread [thread_id]\n"));
