@@ -346,18 +346,18 @@ struct BreakPoint
     void Set()
     {
         SIZE_T dwReadWriteBytes;
-        ReadProcessMemory(hProcess, (void*) Address, &cInstruction, 1, &dwReadWriteBytes);
+        CHECK(ReadProcessMemory(hProcess, (LPCVOID) Address, &cInstruction, 1, &dwReadWriteBytes), 0);
 
         BYTE cInt3Instruction = 0xCC;   // INT 3 - hardcoded breakpoint
-        WriteProcessMemory(hProcess, (void*) Address, &cInt3Instruction, 1, &dwReadWriteBytes);
-        FlushInstructionCache(hProcess, (void*) Address, 1);
+        CHECK(WriteProcessMemory(hProcess, (LPVOID) Address, &cInt3Instruction, 1, &dwReadWriteBytes), 0);
+        CHECK(FlushInstructionCache(hProcess, (LPCVOID) Address, 1), 0);
     }
 
     void Unset()
     {
         SIZE_T dwReadWriteBytes;
-        WriteProcessMemory(hProcess, (void*) Address, &cInstruction, 1, &dwReadWriteBytes);
-        FlushInstructionCache(hProcess, (void*) Address, 1);
+        CHECK(WriteProcessMemory(hProcess, (LPVOID) Address, &cInstruction, 1, &dwReadWriteBytes), 0);
+        CHECK(FlushInstructionCache(hProcess, (LPCVOID) Address, 1), 0);
         cInstruction = 0;
     }
 };
@@ -474,11 +474,12 @@ Debugger::UserCommand Debugger::UserInputLoop(const DEBUG_EVENT& DebugEv, const 
             _tprintf(_T("return  - step out to new line\n"));
             _tprintf(_T("context - show registers\n"));
             _tprintf(_T("stack   - show stacktrace\n"));
+            _tprintf(_T("mem [addresss]     - show memory contents\n"));
             _tprintf(_T("source  - show sourcecode\n"));
             _tprintf(_T("bp      - list breakpoints\n"));
-            _tprintf(_T("bp add <symbol>     - add a breakpoint\n"));
+            _tprintf(_T("bp add [symbol]    - add a breakpoint\n"));
             _tprintf(_T("threads - list threads\n"));
-            _tprintf(_T("thread <thread_id>  - switch threads\n"));
+            _tprintf(_T("thread [thread_id] - switch threads\n"));
             _tprintf(_T("detach  - detach debugger\n"));
             _tprintf(_T("exit    - exit debugger\n"));
         }
@@ -593,6 +594,38 @@ Debugger::UserCommand Debugger::UserInputLoop(const DEBUG_EVENT& DebugEv, const 
 #endif
             }
         }
+        else if (args[0] == TEXT("mem"))
+        {
+            if (args.size() == 2)
+            {
+                const int LineLength = 16;
+                DWORD64 Address = std::_tcstoull(args[1].c_str(), nullptr, 0);
+                DWORD64 Length = 10 * LineLength;
+
+                std::unique_ptr<BYTE[], FreeDeleter> Memory((BYTE*) malloc(Length * sizeof(BYTE)));
+                CHECK(ReadProcessMemory(hProcess,
+                    (LPCVOID) Address,
+                    Memory.get(),
+                    Length * sizeof(BYTE), nullptr), continue);
+
+                for (DWORD64 i = 0; i < Length; ++i)
+                {
+                    if ((i % LineLength) == 0)
+                        _tprintf(_T("%p: "), (LPCVOID) (Address + i));
+                    _tprintf(_T("%02x "), Memory[i]);
+                    if (((i + 1) % LineLength) == 0)
+                    {
+                        for (DWORD64 j = i + 1 - LineLength; j <= i; ++j)
+                        {
+                            printf("%c", std::isprint(Memory[j]) ? Memory[j] : '.');
+                        }
+                        _tprintf(_T("\n"));
+                    }
+                }
+            }
+            else
+                _tprintf(_T("Usage: mem [address]\n"));
+        }
         else if (args[0] == TEXT("dump"))
         {
             _tprintf(_T("TODO\n"));
@@ -663,7 +696,7 @@ Debugger::UserCommand Debugger::UserInputLoop(const DEBUG_EVENT& DebugEv, const 
         {
             if (args.size() == 2)
             {
-                DWORD dwNewThreadId = _tcstoul(args[1].c_str(), nullptr, 10);
+                DWORD dwNewThreadId = std::_tcstoul(args[1].c_str(), nullptr, 10);
                 auto it = m_Threads.find(dwNewThreadId);
                 if (it == m_Threads.end())
                     _tprintf(_T("Thread not found\n"));
@@ -1167,23 +1200,21 @@ DWORD Debugger::OnOutputDebugStringEvent(const DEBUG_EVENT& DebugEv, const OUTPU
 
     if (DebugString.fUnicode)
     {
-        WCHAR* msg = new WCHAR[DebugString.nDebugStringLength];
-        ReadProcessMemory(hProcess,
+        std::unique_ptr<WCHAR[], FreeDeleter> msg((WCHAR*) malloc(DebugString.nDebugStringLength * sizeof(WCHAR)));
+        CHECK(ReadProcessMemory(hProcess,
             DebugString.lpDebugStringData,
-            msg,
-            DebugString.nDebugStringLength * sizeof(WCHAR), nullptr);
-        wprintf(msg);
-        delete[] msg;
+            msg.get(),
+            DebugString.nDebugStringLength * sizeof(WCHAR), nullptr), 0);
+        wprintf(msg.get());
     }
     else
     {
-        CHAR* msg = new CHAR[DebugString.nDebugStringLength];
-        ReadProcessMemory(hProcess,
+        std::unique_ptr<CHAR[], FreeDeleter> msg((CHAR*) malloc(DebugString.nDebugStringLength * sizeof(CHAR)));
+        CHECK(ReadProcessMemory(hProcess,
             DebugString.lpDebugStringData,
-            msg,
-            DebugString.nDebugStringLength * sizeof(CHAR), nullptr);
-        printf(msg);
-        delete[] msg;
+            msg.get(),
+            DebugString.nDebugStringLength * sizeof(CHAR), nullptr), 0);
+        printf(msg.get());
     }
 
     return DBG_CONTINUE;

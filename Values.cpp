@@ -193,7 +193,7 @@ static void ShowValuePointerType(HANDLE hProcess, DWORD64 ModBase, ULONG TypeId,
             &NewAddress,
             Length, nullptr);
 
-        printf(" %p", (PVOID) NewAddress);
+        printf(" 0x%p", (PVOID) NewAddress);
 
         DWORD Type = 0;
         CHECK(SymGetTypeInfo(hProcess, ModBase, TypeId, TI_GET_TYPE, &Type), 0)
