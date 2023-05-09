@@ -340,6 +340,7 @@ struct BreakPoint
 {
     HANDLE hProcess;
     ULONG64 Address;
+    DWORD dwThreadId;
     BYTE cInstruction;
 
     void Set()
@@ -390,8 +391,9 @@ public:
         m_breakpoints.push_back(bp);
     }
 
-    void AddTempBreakpoint(HANDLE hProcess, ULONG64 Address)
+    void AddTempBreakpoint(HANDLE hProcess, ULONG64 Address, DWORD dwThreadId)
     {
+        // TODO Should we allow multiple breakpoints at same address but different threads?
         auto it1 = std::find_if(m_tempbreakpoints.begin(), m_tempbreakpoints.end(), [Address](const BreakPoint& bp) { return bp.Address == Address; });
         if (it1 != m_tempbreakpoints.end())
             return; // breakpoint already exists
@@ -400,7 +402,7 @@ public:
         if (it2 != m_breakpoints.end())
             return; // full breakpoint already exists
 
-        BreakPoint bp({ hProcess, Address });
+        BreakPoint bp({ hProcess, Address, dwThreadId });
         bp.Set();
         m_tempbreakpoints.push_back(bp);
     }
@@ -453,11 +455,13 @@ Debugger::UserCommand Debugger::UserInputLoop(const DEBUG_EVENT& DebugEv, const 
     const HANDLE hStdIn = GetStdHandle(STD_INPUT_HANDLE);
 
     const HANDLE hProcess = GetProcess(DebugEv.dwProcessId);
-    HANDLE hThread = GetThread(DebugEv.dwThreadId);
+    DWORD dwThreadId = DebugEv.dwThreadId;
+    HANDLE hThread = GetThread(dwThreadId);
 
     TCHAR line[1024];
     // TODO Use ReadConsole and trap F? keys to step, next, etc
-    while (_tprintf(_T(COLOR_PROMPT "> " COLOR_RETURN)) && SUCCEEDED(StringCchGets(line, ARRAYSIZE(line))))
+    while (_tprintf(_T(COLOR_PROMPT "%d:%d> " COLOR_RETURN), DebugEv.dwProcessId, dwThreadId)
+        && SUCCEEDED(StringCchGets(line, ARRAYSIZE(line))))
     {
         std::vector<std::tstring> args = split_quoted(line);
         if (args.empty())
@@ -497,10 +501,9 @@ Debugger::UserCommand Debugger::UserInputLoop(const DEBUG_EVENT& DebugEv, const 
 
             // TODO if get line fails do a STEP_ASM
 
-            //ULONG64 Address = GetAddressFromSource(hProcess, line.FileName, line.LineNumber);
-            AddTempBreakpoint(hProcess, line.Address);
+            AddTempBreakpoint(hProcess, line.Address, dwThreadId);
 
-            // Also set breakpoint on anj jumps in case it branches or loops
+            // TODO Also set breakpoint on any jumps in case it branches or loops
 
             return UserCommand::CONT;
         }
@@ -524,9 +527,7 @@ Debugger::UserCommand Debugger::UserInputLoop(const DEBUG_EVENT& DebugEv, const 
             // Step-out
             std::vector<STACKFRAME64> stack = GetCallstack(hProcess, hThread);
 
-            // TODO Add breakpoint for current thread
-
-            AddTempBreakpoint(hProcess, stack.front().AddrReturn.Offset);
+            AddTempBreakpoint(hProcess, stack.front().AddrReturn.Offset, dwThreadId);
 
             return UserCommand::CONT;
         }
@@ -668,6 +669,7 @@ Debugger::UserCommand Debugger::UserInputLoop(const DEBUG_EVENT& DebugEv, const 
                     _tprintf(_T("Thread not found\n"));
                 else
                 {
+                    dwThreadId = it->first;
                     hThread = it->second;
 
                     std::vector<STACKFRAME64> stack = GetCallstack(hProcess, hThread);
@@ -821,22 +823,34 @@ DWORD Debugger::OnExceptionDebugEvent(const DEBUG_EVENT& DebugEv, const EXCEPTIO
         // First chance: Display the current 
         // instruction and register values. 
 
-        _tprintf(_T(COLOR_MESSAGE "Breakpoint: " COLOR_RETURN "0x%p"), ExceptionRecord.ExceptionAddress);
+        // TODO Should it stop on the first breakpoint set by the system?
+
         MYASSERT(m_pLastBreakPoint == nullptr);
 
         bool found = false;
-        for (BreakPoint& bp : m_tempbreakpoints)
+        for (const BreakPoint& bp : m_tempbreakpoints)
         {
-            if ((PVOID) bp.Address == ExceptionRecord.ExceptionAddress)
+            if (bp.hProcess == hProcess
+                && (PVOID) bp.Address == ExceptionRecord.ExceptionAddress
+                && bp.dwThreadId == DebugEv.dwThreadId)
+            {
+                MYASSERT(!found);
                 found = true;
-            bp.Unset();
+            }
         }
-        m_tempbreakpoints.clear();
+        if (found)
+        {
+            for (BreakPoint& bp : m_tempbreakpoints)
+                bp.Unset();
+            m_tempbreakpoints.clear();
+        }
 
         for (BreakPoint& bp : m_breakpoints)
         {
-            if ((PVOID) bp.Address == ExceptionRecord.ExceptionAddress)
+            if (bp.hProcess == hProcess
+                && (PVOID) bp.Address == ExceptionRecord.ExceptionAddress)
             {
+                MYASSERT(!found);
                 found = true;
                 m_pLastBreakPoint = &bp;
                 bp.Unset();
@@ -873,12 +887,15 @@ DWORD Debugger::OnExceptionDebugEvent(const DEBUG_EVENT& DebugEv, const EXCEPTIO
             }
         }
 
-        _tprintf(_T("\n"));
+        if (found)
+        {
+            _tprintf(_T(COLOR_MESSAGE "Breakpoint: " COLOR_RETURN "0x%p\n"), ExceptionRecord.ExceptionAddress);
 
-        ShowStackFrame(hProcess, (DWORD64) ExceptionRecord.ExceptionAddress);
+            ShowStackFrame(hProcess, (DWORD64) ExceptionRecord.ExceptionAddress);
 
-        ret = DBG_CONTINUE;
-        m_LastCmd = UserInputLoop(DebugEv, ExceptionRecord);
+            ret = DBG_CONTINUE;
+            m_LastCmd = UserInputLoop(DebugEv, ExceptionRecord);
+        }
     }
     break;
 
@@ -1029,7 +1046,7 @@ DWORD Debugger::OnCreateProcessDebugEvent(const DEBUG_EVENT& DebugEv, const CREA
 
     _tprintf(_T(", %s\n"), szSymType);
 
-    for (LPCTSTR Name : { TEXT("wWinMainCRTStartup"), TEXT("main"), TEXT("wmain"), TEXT("WinMain"), TEXT("wWinMain") })
+    for (LPCTSTR Name : { TEXT("mainCRTStartup"), TEXT("wWinMainCRTStartup"), TEXT("main"), TEXT("wmain"), TEXT("WinMain"), TEXT("wWinMain") })
     {
         ULONG64 Address = GetAddressFromName(hProcess, Name, false);
         if (Address != 0)
