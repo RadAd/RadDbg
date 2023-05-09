@@ -41,6 +41,14 @@ struct FreeDeleter
 };
 
 template<class T>
+std::unique_ptr<T[], FreeDeleter> amalloc(size_t count)
+{
+    const size_t size = sizeof(T) * count;
+    std::unique_ptr<T[], FreeDeleter> p((T*) malloc(size));
+    return p;
+}
+
+template<class T>
 std::unique_ptr<T, FreeDeleter> zmalloc(size_t extra)
 {
     const size_t size = sizeof(T) + extra;

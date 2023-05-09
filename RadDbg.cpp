@@ -602,7 +602,7 @@ Debugger::UserCommand Debugger::UserInputLoop(const DEBUG_EVENT& DebugEv, const 
                 DWORD64 Address = std::_tcstoull(args[1].c_str(), nullptr, 0);
                 DWORD64 Length = 10 * LineLength;
 
-                std::unique_ptr<BYTE[], FreeDeleter> Memory((BYTE*) malloc(Length * sizeof(BYTE)));
+                auto Memory = amalloc<BYTE>(Length);
                 CHECK(ReadProcessMemory(hProcess,
                     (LPCVOID) Address,
                     Memory.get(),
@@ -1055,7 +1055,7 @@ DWORD Debugger::OnCreateProcessDebugEvent(const DEBUG_EVENT& DebugEv, const CREA
     // file with CloseHandle.
 
     const int FileNameSize = 32767;
-    std::unique_ptr<TCHAR[], FreeDeleter> FileName((TCHAR*) malloc(FileNameSize * sizeof(TCHAR)));
+    auto FileName = amalloc<TCHAR>(FileNameSize);
     FileName[0] = TEXT('\0');
     GetFinalPathNameByHandle(CreateProcessInfo.hFile, FileName.get(), FileNameSize, FILE_NAME_OPENED | VOLUME_NAME_DOS);
     _tprintf(_T("%s"), FileName.get() + 4); // Skip "\\?\"
@@ -1137,7 +1137,7 @@ DWORD Debugger::OnLoadDllDebugEvent(const DEBUG_EVENT& DebugEv, const LOAD_DLL_D
     const HANDLE hProcess = GetProcess(DebugEv.dwProcessId);
 
     const int FileNameSize = 32767;
-    std::unique_ptr<TCHAR[], FreeDeleter> FileName((TCHAR*) malloc(FileNameSize * sizeof(TCHAR)));
+    auto FileName = amalloc<TCHAR>(FileNameSize);
     FileName[0] = '\0';
     GetFinalPathNameByHandle(LoadDll.hFile, FileName.get(), FileNameSize, FILE_NAME_OPENED | VOLUME_NAME_DOS);
     _tprintf(_T("%s"), FileName.get() + 4); // Skip "\\?\"
@@ -1200,7 +1200,7 @@ DWORD Debugger::OnOutputDebugStringEvent(const DEBUG_EVENT& DebugEv, const OUTPU
 
     if (DebugString.fUnicode)
     {
-        std::unique_ptr<WCHAR[], FreeDeleter> msg((WCHAR*) malloc(DebugString.nDebugStringLength * sizeof(WCHAR)));
+        auto msg = amalloc<WCHAR>(DebugString.nDebugStringLength);
         CHECK(ReadProcessMemory(hProcess,
             DebugString.lpDebugStringData,
             msg.get(),
@@ -1209,7 +1209,7 @@ DWORD Debugger::OnOutputDebugStringEvent(const DEBUG_EVENT& DebugEv, const OUTPU
     }
     else
     {
-        std::unique_ptr<CHAR[], FreeDeleter> msg((CHAR*) malloc(DebugString.nDebugStringLength * sizeof(CHAR)));
+        auto msg = amalloc<CHAR>(DebugString.nDebugStringLength);
         CHECK(ReadProcessMemory(hProcess,
             DebugString.lpDebugStringData,
             msg.get(),
