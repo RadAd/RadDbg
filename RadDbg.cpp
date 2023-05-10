@@ -336,6 +336,43 @@ void ShowThread(HANDLE hProcess, HANDLE hThread, DWORD dwThreadId, BOOL bCurrent
     _tprintf(_T("\n"));
 }
 
+enum ATCFlags
+{
+    SET_TRAP = 1,
+    STEP_BACK_IP = 2,
+};
+
+void AdjustThreadContext(HANDLE hProcess, HANDLE hThread, DWORD Flags)
+{
+    BOOL bIsWow64;
+    CHECK(IsWow64Process(hProcess, &bIsWow64), 0);
+
+    if (bIsWow64)
+    {
+        WOW64_CONTEXT lcContext = {};
+        lcContext.ContextFlags = CONTEXT_ALL;
+        CHECK(Wow64GetThreadContext(hThread, &lcContext), 0);
+
+        if (Flags & STEP_BACK_IP)
+            lcContext.Eip--; // Move back one byte
+        if (Flags & SET_TRAP)
+            lcContext.EFlags |= 0x100; // Set trap flag, which raises "single-step" exception
+        CHECK(Wow64SetThreadContext(hThread, &lcContext), 0);
+    }
+    else
+    {
+        CONTEXT lcContext = {};
+        lcContext.ContextFlags = CONTEXT_ALL;
+        CHECK(GetThreadContext(hThread, &lcContext), 0);
+
+        if (Flags & STEP_BACK_IP)
+            lcContext.Rip--; // Move back one byte
+        if (Flags & SET_TRAP)
+            lcContext.EFlags |= 0x100; // Set trap flag, which raises "single-step" exception
+        CHECK(SetThreadContext(hThread, &lcContext), 0);
+    }
+}
+
 struct BreakPoint
 {
     HANDLE hProcess;
@@ -517,13 +554,9 @@ Debugger::UserCommand Debugger::UserInputLoop(const DEBUG_EVENT& DebugEv, const 
             m_CurrentLine.SizeOfStruct = sizeof(IMAGEHLP_LINE64);
             DWORD disp = 0;
             CHECK(SymGetLineFromAddr64(hProcess, (DWORD64) ExceptionRecord.ExceptionAddress, &disp, &m_CurrentLine), continue);
+            // TODO Handle step when there is no source code
 
-            CONTEXT lcContext = {};
-            lcContext.ContextFlags = CONTEXT_ALL;
-            GetThreadContext(hThread, &lcContext);
-
-            lcContext.EFlags |= 0x100; // Set trap flag, which raises "single-step" exception
-            SetThreadContext(hThread, &lcContext);
+            AdjustThreadContext(hProcess, hThread, SET_TRAP);
 
             return UserCommand::STEP_IN;
         }
@@ -886,36 +919,9 @@ DWORD Debugger::OnExceptionDebugEvent(const DEBUG_EVENT& DebugEv, const EXCEPTIO
 
         if (found)
         {
-            BOOL bIsWow64;
-            CHECK(IsWow64Process(hProcess, &bIsWow64), 0);
-
-            if (bIsWow64)
-            {
-                WOW64_CONTEXT lcContext = {};
-                lcContext.ContextFlags = CONTEXT_ALL;
-                Wow64GetThreadContext(hThread, &lcContext);
-
-                lcContext.Eip--; // Move back one byte
-                if (m_pLastBreakPoint != nullptr)
-                    lcContext.EFlags |= 0x100; // Set trap flag, which raises "single-step" exception
-                Wow64SetThreadContext(hThread, &lcContext);
-            }
-            else
-            {
-                CONTEXT lcContext = {};
-                lcContext.ContextFlags = CONTEXT_ALL;
-                GetThreadContext(hThread, &lcContext);
-
-                lcContext.Rip--; // Move back one byte
-                if (m_pLastBreakPoint != nullptr)
-                    lcContext.EFlags |= 0x100; // Set trap flag, which raises "single-step" exception
-                SetThreadContext(hThread, &lcContext);
-            }
-        }
-
-        if (found)
-        {
             _tprintf(_T(COLOR_MESSAGE "Breakpoint: " COLOR_RETURN "0x%p\n"), ExceptionRecord.ExceptionAddress);
+
+            AdjustThreadContext(hProcess, hThread, STEP_BACK_IP | (m_pLastBreakPoint != nullptr ? SET_TRAP : 0));
 
             ShowStackFrame(hProcess, (DWORD64) ExceptionRecord.ExceptionAddress);
 
@@ -953,15 +959,8 @@ DWORD Debugger::OnExceptionDebugEvent(const DEBUG_EVENT& DebugEv, const EXCEPTIO
             else
             {
                 if (line.LineNumber == m_CurrentLine.LineNumber
-                    && _tcscpy_s(line.FileName, MAX_PATH, m_CurrentLine.FileName) == 0)
-                {
-                    CONTEXT lcContext = {};
-                    lcContext.ContextFlags = CONTEXT_ALL;
-                    GetThreadContext(hThread, &lcContext);
-
-                    lcContext.EFlags |= 0x100; // Set trap flag, which raises "single-step" exception
-                    SetThreadContext(hThread, &lcContext);
-                }
+                    && (line.FileName == m_CurrentLine.FileName || _tcscpy_s(line.FileName, MAX_PATH, m_CurrentLine.FileName) == 0))
+                    AdjustThreadContext(hProcess, hThread, SET_TRAP);
                 else
                     DoUserInputLoop = true;
             }
