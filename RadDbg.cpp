@@ -412,7 +412,7 @@ protected:
     {
         NONE,
         CONT,
-        //STEP,
+        STEP_IN,
         EXIT,
     };
 
@@ -447,11 +447,14 @@ private:
     std::vector<BreakPoint> m_breakpoints;
     std::vector<BreakPoint> m_tempbreakpoints;
     BreakPoint* m_pLastBreakPoint = nullptr;
+    IMAGEHLP_LINE   m_CurrentLine;
     std::map<LPVOID, std::tstring> m_DLLs;
 };
 
 Debugger::UserCommand Debugger::UserInputLoop(const DEBUG_EVENT& DebugEv, const EXCEPTION_RECORD& ExceptionRecord)
 {
+    ZeroMemory(&m_CurrentLine, sizeof(m_CurrentLine));
+
     const HANDLE hStdIn = GetStdHandle(STD_INPUT_HANDLE);
 
     const HANDLE hProcess = GetProcess(DebugEv.dwProcessId);
@@ -511,17 +514,18 @@ Debugger::UserCommand Debugger::UserInputLoop(const DEBUG_EVENT& DebugEv, const 
         else if (args[0] == TEXT("step"))
         {
             // Step-in
-            _tprintf(_T("TODO\n"));
-
-            IMAGEHLP_LINE64 line = {};
-            line.SizeOfStruct = sizeof(IMAGEHLP_LINE64);
+            m_CurrentLine.SizeOfStruct = sizeof(IMAGEHLP_LINE64);
             DWORD disp = 0;
-            CHECK(SymGetLineFromAddr64(hProcess, (DWORD64) ExceptionRecord.ExceptionAddress, &disp, &line), continue);
+            CHECK(SymGetLineFromAddr64(hProcess, (DWORD64) ExceptionRecord.ExceptionAddress, &disp, &m_CurrentLine), continue);
 
-            // Get call address and set breakpoint there
-            // Also set breakpoint on next line in case it branches
+            CONTEXT lcContext = {};
+            lcContext.ContextFlags = CONTEXT_ALL;
+            GetThreadContext(hThread, &lcContext);
 
-            // Alternatively single step until source line changes
+            lcContext.EFlags |= 0x100; // Set trap flag, which raises "single-step" exception
+            SetThreadContext(hThread, &lcContext);
+
+            return UserCommand::STEP_IN;
         }
         else if (args[0] == TEXT("return"))
         {
@@ -529,6 +533,9 @@ Debugger::UserCommand Debugger::UserInputLoop(const DEBUG_EVENT& DebugEv, const 
             std::vector<STACKFRAME64> stack = GetCallstack(hProcess, hThread);
 
             AddTempBreakpoint(hProcess, stack.front().AddrReturn.Offset, dwThreadId);
+
+            // TODO This wont work correctly for recursive functions
+            // Maybe add call depth to breakpoint or compare EBP?
 
             return UserCommand::CONT;
         }
@@ -949,24 +956,37 @@ DWORD Debugger::OnExceptionDebugEvent(const DEBUG_EVENT& DebugEv, const EXCEPTIO
             m_pLastBreakPoint = nullptr;
         }
 
-#if 0
-        if (LastCmd == UserCommand::STEP)
+        bool DoUserInputLoop = false;
+
+        if (m_LastCmd == UserCommand::STEP_IN)
         {
-            _tprintf(_T(COLOR_MESSAGE "Single step: " COLOR_RETURN "0x%p\n"), ExceptionRecord.ExceptionAddress);
-
-            LastCmd = UserInputLoop(DebugEv, ExceptionRecord);
-
-            if (LastCmd == UserCommand::STEP)
+            IMAGEHLP_LINE64 line = {};
+            line.SizeOfStruct = sizeof(IMAGEHLP_LINE64);
+            DWORD disp = 0;
+            CHECK(SymGetLineFromAddr64(hProcess, (DWORD64) ExceptionRecord.ExceptionAddress, &disp, &line), DoUserInputLoop = true)
+            else
             {
-                CONTEXT lcContext = {};
-                lcContext.ContextFlags = CONTEXT_ALL;
-                GetThreadContext(hThread, &lcContext);
+                if (line.LineNumber == m_CurrentLine.LineNumber
+                    && _tcscpy_s(line.FileName, MAX_PATH, m_CurrentLine.FileName) == 0)
+                {
+                    CONTEXT lcContext = {};
+                    lcContext.ContextFlags = CONTEXT_ALL;
+                    GetThreadContext(hThread, &lcContext);
 
-                lcContext.EFlags |= 0x100; // Set trap flag, which raises "single-step" exception
-                SetThreadContext(hThread, &lcContext);
+                    lcContext.EFlags |= 0x100; // Set trap flag, which raises "single-step" exception
+                    SetThreadContext(hThread, &lcContext);
+                }
+                else
+                    DoUserInputLoop = true;
             }
         }
-#endif
+
+        if (DoUserInputLoop)
+        {
+            _tprintf(_T(COLOR_MESSAGE "Single step: " COLOR_RETURN "0x%p\n"), ExceptionRecord.ExceptionAddress);
+            ShowStackFrame(hProcess, (DWORD64) ExceptionRecord.ExceptionAddress);
+            m_LastCmd = UserInputLoop(DebugEv, ExceptionRecord);
+        }
     }
     break;
 
