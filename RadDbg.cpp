@@ -585,20 +585,6 @@ Debugger::UserCommand Debugger::UserInputLoop(const DEBUG_EVENT& DebugEv, const 
             for (const STACKFRAME64& s : stack)
             {
                 ShowStackFrame(hProcess, s.AddrPC.Offset);
-
-#if 0
-                IMAGEHLP_STACK_FRAME imghlp_frame = {};
-                //imghlp_frame.InstructionOffset = (ULONG64) ExceptionRecord.ExceptionAddress;
-                imghlp_frame.InstructionOffset = (ULONG64) s.AddrPC.Offset;
-                CHECK_IGNORE(SymSetContext(hProcess, &imghlp_frame, nullptr), ERROR_SUCCESS, continue);
-
-                DWORD64 BaseOfImage = SymGetModuleBase64(hProcess, (DWORD64) s.AddrPC.Offset);
-                if (BaseOfImage == 0)
-                    ShowError(TEXT("SymGetModuleBase64"), GetLastError());
-
-                EnumSymProcData espdata = { hProcess, BaseOfImage, SYMFLAG_LOCAL, &lcContext };
-                CHECK(SymEnumSymbols(hProcess, 0, "*", EnumSymProc, &espdata), continue);
-#endif
             }
         }
         else if (args[0] == TEXT("mem"))
