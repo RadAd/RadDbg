@@ -479,11 +479,11 @@ public:
 
     void AddBreakpoint(HANDLE hProcess, ULONG64 Address)
     {
-        auto it1 = std::find_if(m_breakpoints.begin(), m_breakpoints.end(), [Address](const BreakPoint& bp) { return bp.Address == Address; });
+        auto it1 = std::find_if(m_breakpoints.begin(), m_breakpoints.end(), [hProcess, Address](const BreakPoint& bp) { return bp.hProcess == hProcess && bp.Address == Address; });
         if (it1 != m_breakpoints.end())
             return; // breakpoint already exists
 
-        auto it2 = std::find_if(m_tempbreakpoints.begin(), m_tempbreakpoints.end(), [Address](const BreakPoint& bp) { return bp.Address == Address; });
+        auto it2 = std::find_if(m_tempbreakpoints.begin(), m_tempbreakpoints.end(), [hProcess, Address](const BreakPoint& bp) { return bp.hProcess == hProcess && bp.Address == Address; });
         if (it2 != m_tempbreakpoints.end())
         {
             it2->Unset();
@@ -495,14 +495,26 @@ public:
         m_breakpoints.push_back(bp);
     }
 
+    bool DeleteBreakpoint(HANDLE hProcess, ULONG64 Address)
+    {
+        auto it1 = std::find_if(m_breakpoints.begin(), m_breakpoints.end(), [hProcess, Address](const BreakPoint& bp) { return bp.hProcess == hProcess && bp.Address == Address; });
+        if (it1 != m_breakpoints.end())
+        {
+            m_breakpoints.erase(it1);
+            return true;
+        }
+        else
+            return false;
+    }
+
     void AddTempBreakpoint(HANDLE hProcess, ULONG64 Address, DWORD dwThreadId)
     {
         // TODO Should we allow multiple breakpoints at same address but different threads?
-        auto it1 = std::find_if(m_tempbreakpoints.begin(), m_tempbreakpoints.end(), [Address](const BreakPoint& bp) { return bp.Address == Address; });
+        auto it1 = std::find_if(m_tempbreakpoints.begin(), m_tempbreakpoints.end(), [hProcess, Address](const BreakPoint& bp) { return bp.hProcess == hProcess && bp.Address == Address; });
         if (it1 != m_tempbreakpoints.end())
             return; // breakpoint already exists
 
-        auto it2 = std::find_if(m_breakpoints.begin(), m_breakpoints.end(), [Address](const BreakPoint& bp) { return bp.Address == Address; });
+        auto it2 = std::find_if(m_breakpoints.begin(), m_breakpoints.end(), [hProcess, Address](const BreakPoint& bp) { return bp.hProcess == hProcess && bp.Address == Address; });
         if (it2 != m_breakpoints.end())
             return; // full breakpoint already exists
 
@@ -585,6 +597,7 @@ Debugger::UserCommand Debugger::UserInputLoop(const DEBUG_EVENT& DebugEv, const 
             _tprintf(_T("source  - show sourcecode\n"));
             _tprintf(_T("bp      - list breakpoints\n"));
             _tprintf(_T("bp add [symbol]    - add a breakpoint\n"));
+            _tprintf(_T("bp del [symbol]    - delete a breakpoint\n"));
             _tprintf(_T("threads - list threads\n"));
             _tprintf(_T("thread [thread_id] - switch threads\n"));
             _tprintf(_T("detach  - detach debugger\n"));
@@ -796,6 +809,15 @@ Debugger::UserCommand Debugger::UserInputLoop(const DEBUG_EVENT& DebugEv, const 
                 ULONG64 Address = GetAddressFromName(hProcess, args[2].c_str(), true);
                 if (Address != 0)
                     AddBreakpoint(hProcess, Address);
+            }
+            else if (args[1] == TEXT("del") && args.size() == 3)
+            {
+                ULONG64 Address = GetAddressFromName(hProcess, args[2].c_str(), true);
+                if (Address != 0)
+                {
+                    if (!DeleteBreakpoint(hProcess, Address))
+                        _tprintf(_T("Breakpoint not found\n"));
+                }
             }
             else
                 _tprintf(_T("Unknown command\n"));
