@@ -1178,7 +1178,7 @@ DWORD Debugger::OnCreateProcessDebugEvent(const DEBUG_EVENT& DebugEv, const CREA
 
     IMAGEHLP_MODULE64 Module = {};
     Module.SizeOfStruct = sizeof(IMAGEHLP_MODULE64);
-    LPCTSTR szSymType = TEXT("-unknown-");
+    LPCTSTR szSymType = TEXT("-error-");
     CHECK(SymGetModuleInfo64(hProcess, (DWORD64) CreateProcessInfo.lpBaseOfImage, &Module), 0)
     else
         szSymType = GetSymType(Module.SymType);
@@ -1253,8 +1253,10 @@ DWORD Debugger::OnLoadDllDebugEvent(const DEBUG_EVENT& DebugEv, const LOAD_DLL_D
 
     IMAGEHLP_MODULE64 Module = {};
     Module.SizeOfStruct = sizeof(IMAGEHLP_MODULE64);
-    LPCTSTR szSymType = TEXT("-unknown-");
+    LPCTSTR szSymType = TEXT("-error-");
     CHECK(SymGetModuleInfo64(hProcess, (DWORD64) LoadDll.lpBaseOfDll, &Module), 0)
+    else
+        szSymType = GetSymType(Module.SymType);
 
     _tprintf(_T(", %s\n"), szSymType);
 
