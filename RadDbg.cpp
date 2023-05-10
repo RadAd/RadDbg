@@ -12,13 +12,16 @@
 #ifdef _M_IX86
 #ifdef  UNICODE
 #define IMAGEHLP_LINE IMAGEHLP_LINEW
+#define IMAGEHLP_MODULE IMAGEHLP_MODULEW
 // TODO There is a bug in the definition of IMAGEHLP_LINEW.FileName - should be PWSTR, not PCHAR
 #define FIXFILENAME(x) (PWSTR) (x)
 #define SymGetLineFromAddr SymGetLineFromAddrW
 #define SymGetLineFromName SymGetLineFromNameW
 #define SymGetLineNext SymGetLineNextW
+#define SymGetModuleInfo SymGetModuleInfoW
 
 // TODO Missing declaration in DbgHelp
+extern "C" {
 BOOL
 IMAGEAPI
 SymGetLineFromNameW(
@@ -29,7 +32,7 @@ SymGetLineFromNameW(
     _Out_ PLONG plDisplacement,
     _Inout_ PIMAGEHLP_LINEW Line
 );
-
+}
 #endif
 #else
 #define FIXFILENAME(x) (x)
@@ -212,7 +215,7 @@ void ShowStackFrame(HANDLE hProcess, DWORD64 Offset)
     IMAGEHLP_LINE Line = {};
     Line.SizeOfStruct = sizeof(Line);
 
-    IMAGEHLP_MODULE64 Module = {};
+    IMAGEHLP_MODULE Module = {};
     Module.SizeOfStruct = sizeof(Module);
 
     DWORD64 offsetFromSmybol = 0;
@@ -234,8 +237,8 @@ void ShowStackFrame(HANDLE hProcess, DWORD64 Offset)
         if (!SymGetLineFromAddr(hProcess, Offset, &offsetFromLine, &Line))
             Line; // ShowError(TEXT("SymGetLineFromAddr"), GetLastError());
 
-        if (!SymGetModuleInfo64(hProcess, Offset, &Module))
-            Module; // ShowError(TEXT("SymGetModuleInfo64"), GetLastError());
+        if (!SymGetModuleInfo(hProcess, Offset, &Module))
+            Module; // ShowError(TEXT("SymGetModuleInfo"), GetLastError());
     }
 
     LPCTSTR name
@@ -260,14 +263,14 @@ void ShowStackFrame(HANDLE hProcess, DWORD64 Offset)
     _tprintf(_T("\n"));
 }
 
-std::vector<STACKFRAME64> GetCallstack(HANDLE hProcess, HANDLE hThread)
+std::vector<STACKFRAME> GetCallstack(HANDLE hProcess, HANDLE hThread)
 {
     CONTEXT lcContext = {};
     lcContext.ContextFlags = CONTEXT_ALL;
     GetThreadContext(hThread, &lcContext);
 
     // init STACKFRAME for first call
-    STACKFRAME64 s = {}; // in/out stackframe
+    STACKFRAME s = {}; // in/out stackframe
     DWORD imageType;
 #ifdef _M_IX86
     // normally, call ImageNtHeader() and use machine info from PE header
@@ -300,10 +303,10 @@ std::vector<STACKFRAME64> GetCallstack(HANDLE hProcess, HANDLE hThread)
 #error "Platform not supported!"
 #endif
 
-    std::vector<STACKFRAME64> stack;
-    while (StackWalk64(imageType, hProcess, hThread, &s, &lcContext, nullptr, SymFunctionTableAccess64, SymGetModuleBase64, nullptr))
+    std::vector<STACKFRAME> stack;
+    while (StackWalk(imageType, hProcess, hThread, &s, &lcContext, nullptr, SymFunctionTableAccess, SymGetModuleBase, nullptr))
     {
-        // get next stack frame (StackWalk64(), SymFunctionTableAccess64(), SymGetModuleBase64())
+        // get next stack frame (StackWalk(), SymFunctionTableAccess(), SymGetModuleBase())
         // if this returns ERROR_INVALID_ADDRESS (487) or ERROR_NOACCESS (998), you can
         // assume that either you are done, or that the stack is so hosed that the next
         // deeper frame could not be found.
@@ -311,7 +314,7 @@ std::vector<STACKFRAME64> GetCallstack(HANDLE hProcess, HANDLE hThread)
 
         if (s.AddrPC.Offset == s.AddrReturn.Offset)
         {
-            _tprintf(_T("StackWalk64 Endless Callstack! %llu\n"), s.AddrPC.Offset);
+            _tprintf(_T("StackWalk Endless Callstack! %Iu\n"), s.AddrPC.Offset);
             break;
         }
 
@@ -323,9 +326,9 @@ std::vector<STACKFRAME64> GetCallstack(HANDLE hProcess, HANDLE hThread)
         imghlp_frame.InstructionOffset = (ULONG64) s.AddrPC.Offset;
         CHECK_IGNORE(SymSetContext(hProcess, &imghlp_frame, nullptr), ERROR_SUCCESS, continue);
 
-        DWORD64 BaseOfImage = SymGetModuleBase64(hProcess, (DWORD64) s.AddrPC.Offset);
+        DWORD64 BaseOfImage = SymGetModuleBase(hProcess, (DWORD64) s.AddrPC.Offset);
         if (BaseOfImage == 0)
-            ShowError(TEXT("SymGetModuleBase64"), GetLastError());
+            ShowError(TEXT("SymGetModuleBase"), GetLastError());
 
         EnumSymProcData espdata = { hProcess, BaseOfImage, SYMFLAG_LOCAL, &lcContext };
         CHECK(SymEnumSymbols(hProcess, 0, "*", EnumSymProc, &espdata), 0);
@@ -627,7 +630,7 @@ Debugger::UserCommand Debugger::UserInputLoop(const DEBUG_EVENT& DebugEv, const 
 
             // TODO Also set breakpoint on any jumps in case it branches or loops
 
-            std::vector<STACKFRAME64> stack = GetCallstack(hProcess, hThread);
+            std::vector<STACKFRAME> stack = GetCallstack(hProcess, hThread);
 
             AddTempBreakpoint(hProcess, stack.front().AddrReturn.Offset, dwThreadId);
 
@@ -648,12 +651,12 @@ Debugger::UserCommand Debugger::UserInputLoop(const DEBUG_EVENT& DebugEv, const 
         else if (args[0] == TEXT("return"))
         {
             // Step-out
-            std::vector<STACKFRAME64> stack = GetCallstack(hProcess, hThread);
+            std::vector<STACKFRAME> stack = GetCallstack(hProcess, hThread);
 
             AddTempBreakpoint(hProcess, stack.front().AddrReturn.Offset, dwThreadId);
 
             // TODO This wont work correctly for recursive functions
-            // Maybe add call depth to breakpoint or compare EBP?
+            // Maybe add call depth to breakpoint or compare SP?
 
             return UserCommand::CONT;
         }
@@ -718,8 +721,8 @@ Debugger::UserCommand Debugger::UserInputLoop(const DEBUG_EVENT& DebugEv, const 
         }
         else if (args[0] == TEXT("stack"))
         {
-            std::vector<STACKFRAME64> stack = GetCallstack(hProcess, hThread);
-            for (const STACKFRAME64& s : stack)
+            std::vector<STACKFRAME> stack = GetCallstack(hProcess, hThread);
+            for (const STACKFRAME& s : stack)
             {
                 ShowStackFrame(hProcess, s.AddrPC.Offset);
             }
@@ -844,7 +847,7 @@ Debugger::UserCommand Debugger::UserInputLoop(const DEBUG_EVENT& DebugEv, const 
                     dwThreadId = it->first;
                     hThread = it->second;
 
-                    std::vector<STACKFRAME64> stack = GetCallstack(hProcess, hThread);
+                    std::vector<STACKFRAME> stack = GetCallstack(hProcess, hThread);
 
                     ShowStackFrame(hProcess, stack.front().AddrPC.Offset);
                 }
@@ -890,9 +893,9 @@ Debugger::UserCommand Debugger::UserInputLoop(const DEBUG_EVENT& DebugEv, const 
             {
                 LPCTSTR Mask = args.size() >= 2 ? args[1].c_str() : TEXT("*");
 
-                DWORD64 BaseOfImage = SymGetModuleBase64(hProcess, (DWORD64) ExceptionRecord.ExceptionAddress);
+                DWORD64 BaseOfImage = SymGetModuleBase(hProcess, (DWORD64) ExceptionRecord.ExceptionAddress);
                 if (BaseOfImage == 0)
-                    ShowError(TEXT("SymGetModuleBase64"), GetLastError());
+                    ShowError(TEXT("SymGetModuleBase"), GetLastError());
 
                 EnumSymProcData espdata = { hProcess };
                 CHECK(SymEnumSymbols(hProcess, BaseOfImage, Mask, EnumSymProc, &espdata), continue);
@@ -908,7 +911,7 @@ Debugger::UserCommand Debugger::UserInputLoop(const DEBUG_EVENT& DebugEv, const 
                 lcContext.ContextFlags = CONTEXT_ALL;
                 CHECK(GetThreadContext(hThread, &lcContext), continue);
 
-                std::vector<STACKFRAME64> stack = GetCallstack(hProcess, hThread);
+                std::vector<STACKFRAME> stack = GetCallstack(hProcess, hThread);
 
                 LPCTSTR Mask = args.size() >= 2 ? args[1].c_str() : TEXT("*");
 
@@ -936,7 +939,7 @@ Debugger::UserCommand Debugger::UserInputLoop(const DEBUG_EVENT& DebugEv, const 
                 lcContext.ContextFlags = CONTEXT_ALL;
                 CHECK(GetThreadContext(hThread, &lcContext), continue);
 
-                std::vector<STACKFRAME64> stack = GetCallstack(hProcess, hThread);
+                std::vector<STACKFRAME> stack = GetCallstack(hProcess, hThread);
 
                 LPCTSTR Mask = args.size() >= 2 ? args[1].c_str() : TEXT("*");
 
@@ -1198,10 +1201,10 @@ DWORD Debugger::OnCreateProcessDebugEvent(const DEBUG_EVENT& DebugEv, const CREA
 
     CHECK(SymLoadModuleEx(hProcess, 0, FileName.get(), 0, (DWORD64) CreateProcessInfo.lpBaseOfImage, 0, nullptr, 0) != 0, 0);
 
-    IMAGEHLP_MODULE64 Module = {};
-    Module.SizeOfStruct = sizeof(IMAGEHLP_MODULE64);
+    IMAGEHLP_MODULE Module = {};
+    Module.SizeOfStruct = sizeof(IMAGEHLP_MODULE);
     LPCTSTR szSymType = TEXT("-error-");
-    CHECK(SymGetModuleInfo64(hProcess, (DWORD64) CreateProcessInfo.lpBaseOfImage, &Module), 0)
+    CHECK(SymGetModuleInfo(hProcess, (DWORD64) CreateProcessInfo.lpBaseOfImage, &Module), 0)
     else
         szSymType = GetSymType(Module.SymType);
 
@@ -1273,10 +1276,10 @@ DWORD Debugger::OnLoadDllDebugEvent(const DEBUG_EVENT& DebugEv, const LOAD_DLL_D
 
     CHECK(SymLoadModuleEx(hProcess, 0, FileName.get(), 0, (DWORD64) LoadDll.lpBaseOfDll, 0, nullptr, 0) != 0, 0);
 
-    IMAGEHLP_MODULE64 Module = {};
-    Module.SizeOfStruct = sizeof(IMAGEHLP_MODULE64);
+    IMAGEHLP_MODULE Module = {};
+    Module.SizeOfStruct = sizeof(IMAGEHLP_MODULE);
     LPCTSTR szSymType = TEXT("-error-");
-    CHECK(SymGetModuleInfo64(hProcess, (DWORD64) LoadDll.lpBaseOfDll, &Module), 0)
+    CHECK(SymGetModuleInfo(hProcess, (DWORD64) LoadDll.lpBaseOfDll, &Module), 0)
     else
         szSymType = GetSymType(Module.SymType);
 
@@ -1297,10 +1300,10 @@ DWORD Debugger::OnUnloadDllDebugEvent(const DEBUG_EVENT& DebugEv, const UNLOAD_D
     const HANDLE hProcess = GetProcess(DebugEv.dwProcessId);
 
     // I suspect this is causing the dll to be loaded again
-    IMAGEHLP_MODULE64 Module = {};
-    Module.SizeOfStruct = sizeof(IMAGEHLP_MODULE64);
+    IMAGEHLP_MODULE Module = {};
+    Module.SizeOfStruct = sizeof(IMAGEHLP_MODULE);
     LPCTSTR szSymType = "-unknown-";
-    CHECK(SymGetModuleInfo64(hProcess, (DWORD64) UnloadDll.lpBaseOfDll, &Module), 0)
+    CHECK(SymGetModuleInfo(hProcess, (DWORD64) UnloadDll.lpBaseOfDll, &Module), 0)
 
     _tprintf(_T("%s\n"), Module.ImageName + 4); // Skip "\\?\"
 #elif 1
