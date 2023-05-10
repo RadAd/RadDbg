@@ -12,8 +12,13 @@ DWORD64 GetRegValue(ULONG reg, const CONTEXT& context)
 {
     switch (reg)
     {
+#ifdef _M_IX86
+    case CV_REG_EBP: return context.Ebp;
+    case CV_REG_ESP: return context.Esp;
+#elif _M_X64
     case CV_AMD64_RBP: return context.Rbp;
     case CV_AMD64_RSP: return context.Rsp;
+#endif
     default: NOT_IMPLEMENTED; return 0;
     }
 }
@@ -272,7 +277,7 @@ static void ShowValuePointerType(HANDLE hProcess, DWORD64 ModBase, ULONG TypeId,
         ReadProcessMemory(hProcess,
             (LPCVOID) Address,
             &NewAddress,
-            Length, nullptr);
+            (SIZE_T) Length, nullptr);
 
         printf(" 0x%p", (PVOID) NewAddress);
 
@@ -313,11 +318,11 @@ static void ShowValueArrayType(HANDLE hProcess, DWORD64 ModBase, ULONG TypeId, D
                 else
                 {
                     bDoDefault = false;
-                    CHAR* msg = new CHAR[Length / sizeof(CHAR)];
+                    CHAR* msg = new CHAR[(SIZE_T) Length / sizeof(CHAR)];
                     ReadProcessMemory(hProcess,
                         (LPCVOID) Address,
                         msg,
-                        Length, nullptr);
+                        (SIZE_T) Length, nullptr);
 
                     printf(" \"%s\"", msg);
                     delete[] msg;
@@ -330,11 +335,11 @@ static void ShowValueArrayType(HANDLE hProcess, DWORD64 ModBase, ULONG TypeId, D
                 else
                 {
                     bDoDefault = false;
-                    WCHAR* msg = new WCHAR[Length / sizeof(WCHAR)];
+                    WCHAR* msg = new WCHAR[(SIZE_T) Length / sizeof(WCHAR)];
                     ReadProcessMemory(hProcess,
                         (LPCVOID) Address,
                         msg,
-                        Length, nullptr);
+                        (SIZE_T) Length, nullptr);
 
                     wprintf(L" \"%s\"", msg);
                     delete[] msg;
@@ -393,7 +398,7 @@ static void ShowValueBaseType(HANDLE hProcess, DWORD64 ModBase, ULONG TypeId, DW
         };
         MYASSERT(Length <= sizeof(value));
         SIZE_T dwReadWriteBytes;
-        if (Length > 0 && !ReadProcessMemory(hProcess, (LPCVOID) Address, &value, Length, &dwReadWriteBytes))
+        if (Length > 0 && !ReadProcessMemory(hProcess, (LPCVOID) Address, &value, (SIZE_T) Length, &dwReadWriteBytes))
             printf(" *unknown*");
         else
         {

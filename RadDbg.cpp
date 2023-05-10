@@ -9,6 +9,32 @@
 #include <DbgHelp.h>
 #include <tlhelp32.h>
 
+#ifdef _M_IX86
+#ifdef  UNICODE
+#define IMAGEHLP_LINE IMAGEHLP_LINEW
+// TODO There is a bug in the definition of IMAGEHLP_LINEW.FileName - should be PWSTR, not PCHAR
+#define FIXFILENAME(x) (PWSTR) (x)
+#define SymGetLineFromAddr SymGetLineFromAddrW
+#define SymGetLineFromName SymGetLineFromNameW
+#define SymGetLineNext SymGetLineNextW
+
+// TODO Missing declaration in DbgHelp
+BOOL
+IMAGEAPI
+SymGetLineFromNameW(
+    _In_ HANDLE hProcess,
+    _In_opt_ PCWSTR ModuleName,
+    _In_opt_ PCWSTR FileName,
+    _In_ DWORD dwLineNumber,
+    _Out_ PLONG plDisplacement,
+    _Inout_ PIMAGEHLP_LINEW Line
+);
+
+#endif
+#else
+#define FIXFILENAME(x) (x)
+#endif
+
 #include <cstdio>
 //#include <iostream>
 #include <string>
@@ -153,26 +179,37 @@ ULONG64 GetAddressFromName(HANDLE hProcess, LPCTSTR strName, bool log)
 
 ULONG64 GetAddressFromSource(HANDLE hProcess, LPCTSTR strFileName, DWORD dwLineNumber, bool log)
 {
-    IMAGEHLP_LINE64 line = {};
-    line.SizeOfStruct = sizeof(IMAGEHLP_LINE64);
+    IMAGEHLP_LINE line = {};
+    line.SizeOfStruct = sizeof(IMAGEHLP_LINE);
     LONG disp = 0;
-    if (!SymGetLineFromName64(hProcess, nullptr, strFileName, dwLineNumber, &disp, &line))
+    if (!SymGetLineFromName(hProcess, nullptr, strFileName, dwLineNumber, &disp, &line))
     {
         if (log)
-            ShowError(TEXT("SymGetLineFromName64"), GetLastError());
+            ShowError(TEXT("SymGetLineFromName"), GetLastError());
         return 0;
     }
     else
         return line.Address;
 }
 
+#ifdef _M_IX86
+void ShowStackFrame(HANDLE hProcess, DWORD Offset);
 void ShowStackFrame(HANDLE hProcess, DWORD64 Offset)
+{
+    ShowStackFrame(hProcess, (DWORD) Offset);
+}
+void ShowStackFrame(HANDLE hProcess, DWORD Offset)
+#elif _M_X64
+void ShowStackFrame(HANDLE hProcess, DWORD64 Offset)
+#else
+#error "Platform not supported!"
+#endif
 {
     auto pSymbol = zmalloc<SYMBOL_INFO>(MAX_SYM_NAME);
     pSymbol->SizeOfStruct = sizeof(SYMBOL_INFO);
     pSymbol->MaxNameLen = MAX_SYM_NAME;
 
-    IMAGEHLP_LINE64 Line = {};
+    IMAGEHLP_LINE Line = {};
     Line.SizeOfStruct = sizeof(Line);
 
     IMAGEHLP_MODULE64 Module = {};
@@ -194,8 +231,8 @@ void ShowStackFrame(HANDLE hProcess, DWORD64 Offset)
             UnDecorateSymbolName(pSymbol->Name, undFullName, MAX_SYM_NAME, UNDNAME_COMPLETE);
         }
 
-        if (!SymGetLineFromAddr64(hProcess, Offset, &offsetFromLine, &Line))
-            Line; // ShowError(TEXT("SymGetLineFromAddr64"), GetLastError());
+        if (!SymGetLineFromAddr(hProcess, Offset, &offsetFromLine, &Line))
+            Line; // ShowError(TEXT("SymGetLineFromAddr"), GetLastError());
 
         if (!SymGetModuleInfo64(hProcess, Offset, &Module))
             Module; // ShowError(TEXT("SymGetModuleInfo64"), GetLastError());
@@ -208,7 +245,7 @@ void ShowStackFrame(HANDLE hProcess, DWORD64 Offset)
         : nullptr;
 
     LPCTSTR lineFileName
-        = Line.FileName != nullptr ? Line.FileName
+        = FIXFILENAME(Line.FileName) != nullptr ? FIXFILENAME(Line.FileName)
         : nullptr;
 
     LPCTSTR moduleName
@@ -308,27 +345,39 @@ void ShowThread(HANDLE hProcess, HANDLE hThread, DWORD dwThreadId, BOOL bCurrent
 {
     _tprintf(_T("%c %5d"), bCurrent ? _T('*') : _T(' '), dwThreadId);
 
+#ifdef _M_IX86
+    DWORD ip = 0;
+#elif _M_X64
+    DWORD64 ip = 0;
+#endif
+
     CONTEXT lcContext = {};
     lcContext.ContextFlags = CONTEXT_ALL;
     CHECK(GetThreadContext(hThread, &lcContext), 0)
     else
-        _tprintf(_T(" 0x%p"), (LPVOID) lcContext.Rip);
+#ifdef _M_IX86
+        ip = lcContext.Eip;
+#elif _M_X64
+        ip = lcContext.Rip;
+#endif
+
+    _tprintf(_T(" 0x%p"), (LPVOID) ip);
 
     auto pSymbol = zmalloc<SYMBOL_INFO>(MAX_SYM_NAME);
     pSymbol->SizeOfStruct = sizeof(SYMBOL_INFO);
     pSymbol->MaxNameLen = MAX_SYM_NAME;
     DWORD64 dispsym = 0;
-    CHECK(SymFromAddr(hProcess, lcContext.Rip, &dispsym, pSymbol.get()), 0)
+    CHECK(SymFromAddr(hProcess, ip, &dispsym, pSymbol.get()), 0)
     else
         _tprintf(_T(" %s:%llu"), pSymbol->Name, dispsym);
 
-    IMAGEHLP_LINE64 line = {};
-    line.SizeOfStruct = sizeof(IMAGEHLP_LINE64);
+    IMAGEHLP_LINE line = {};
+    line.SizeOfStruct = sizeof(IMAGEHLP_LINE);
     DWORD dispfn = 0;
-    if (!SymGetLineFromAddr64(hProcess, lcContext.Rip, &dispfn, &line))
-        ; // ShowError(TEXT("SymGetLineFromAddr64"), GetLastError());
+    if (!SymGetLineFromAddr(hProcess, ip, &dispfn, &line))
+        ; // ShowError(TEXT("SymGetLineFromAddr"), GetLastError());
     else
-        _tprintf(_T(" %s:%d"), line.FileName, line.LineNumber);
+        _tprintf(_T(" %s:%d"), FIXFILENAME(line.FileName), line.LineNumber);
 
     PWSTR Description = nullptr;
     if (FAILED(GetThreadDescription(hThread, &Description)))
@@ -348,6 +397,17 @@ enum ATCFlags
 
 void AdjustThreadContext(HANDLE hProcess, HANDLE hThread, DWORD Flags)
 {
+#ifdef _M_IX86
+    CONTEXT lcContext = {};
+    lcContext.ContextFlags = CONTEXT_ALL;
+    CHECK(GetThreadContext(hThread, &lcContext), 0);
+
+    if (Flags & STEP_BACK_IP)
+        lcContext.Eip--; // Move back one byte
+    if (Flags & SET_TRAP)
+        lcContext.EFlags |= 0x100; // Set trap flag, which raises "single-step" exception
+    CHECK(SetThreadContext(hThread, &lcContext), 0);
+#elif _M_X64
     BOOL bIsWow64;
     CHECK(IsWow64Process(hProcess, &bIsWow64), 0);
 
@@ -375,6 +435,9 @@ void AdjustThreadContext(HANDLE hProcess, HANDLE hThread, DWORD Flags)
             lcContext.EFlags |= 0x100; // Set trap flag, which raises "single-step" exception
         CHECK(SetThreadContext(hThread, &lcContext), 0);
     }
+#else
+#error "Platform not supported!"
+#endif
 }
 
 struct BreakPoint
@@ -535,15 +598,15 @@ Debugger::UserCommand Debugger::UserInputLoop(const DEBUG_EVENT& DebugEv, const 
         {
             // Step-over
 
-            IMAGEHLP_LINE64 line = {};
-            line.SizeOfStruct = sizeof(IMAGEHLP_LINE64);
+            IMAGEHLP_LINE line = {};
+            line.SizeOfStruct = sizeof(IMAGEHLP_LINE);
             DWORD disp = 0;
-            CHECK(SymGetLineFromAddr64(hProcess, (DWORD64) ExceptionRecord.ExceptionAddress, &disp, &line), continue);
+            CHECK(SymGetLineFromAddr(hProcess, (DWORD64) ExceptionRecord.ExceptionAddress, &disp, &line), continue);
             // TODO Handle next when there is no source code
 
             // TODO what if this is the last or is return statement
 
-            CHECK(SymGetLineNext64(hProcess, &line), continue);
+            CHECK(SymGetLineNext(hProcess, &line), continue);
 
             // TODO if get line fails do a STEP_ASM
 
@@ -560,9 +623,9 @@ Debugger::UserCommand Debugger::UserInputLoop(const DEBUG_EVENT& DebugEv, const 
         else if (args[0] == TEXT("step"))
         {
             // Step-in
-            m_CurrentLine.SizeOfStruct = sizeof(IMAGEHLP_LINE64);
+            m_CurrentLine.SizeOfStruct = sizeof(IMAGEHLP_LINE);
             DWORD disp = 0;
-            CHECK(SymGetLineFromAddr64(hProcess, (DWORD64) ExceptionRecord.ExceptionAddress, &disp, &m_CurrentLine), continue);
+            CHECK(SymGetLineFromAddr(hProcess, (DWORD64) ExceptionRecord.ExceptionAddress, &disp, &m_CurrentLine), continue);
             // TODO Handle step when there is no source code
 
             AdjustThreadContext(hProcess, hThread, SET_TRAP);
@@ -583,6 +646,22 @@ Debugger::UserCommand Debugger::UserInputLoop(const DEBUG_EVENT& DebugEv, const 
         }
         else if (args[0] == TEXT("context"))
         {
+#ifdef _M_IX86
+            CONTEXT lcContext = {};
+            lcContext.ContextFlags = CONTEXT_ALL;
+            CHECK(GetThreadContext(hThread, &lcContext), continue);
+
+            _tprintf(
+                _T("EAX = %08X\nEBX = %08X\nECX = %08X\n")
+                _T("EDX = %08X\nESI = %08X\nEDI = %08X\n")
+                _T("EIP = %08X\nESP = %08X\nEBP = %08X\n")
+                _T("EFL = %08X"),
+                lcContext.Eax, lcContext.Ebx, lcContext.Ecx,
+                lcContext.Edx, lcContext.Esi, lcContext.Edi,
+                lcContext.Eip, lcContext.Esp, lcContext.Ebp,
+                lcContext.EFlags
+            );
+#elif _M_X64
             BOOL bIsWow64;
             CHECK(IsWow64Process(hProcess, &bIsWow64), continue)
 
@@ -620,6 +699,9 @@ Debugger::UserCommand Debugger::UserInputLoop(const DEBUG_EVENT& DebugEv, const 
                     lcContext.EFlags
                 );
             }
+#else
+            _tprintf(_T("Platform not supported!"));
+#endif
         }
         else if (args[0] == TEXT("stack"))
         {
@@ -635,7 +717,7 @@ Debugger::UserCommand Debugger::UserInputLoop(const DEBUG_EVENT& DebugEv, const 
             {
                 const int LineLength = 16;
                 DWORD64 Address = std::_tcstoull(args[1].c_str(), nullptr, 0);
-                DWORD64 Length = 10 * LineLength;
+                SIZE_T Length = 10 * LineLength;
 
                 auto Memory = amalloc<BYTE>(Length);
                 CHECK(ReadProcessMemory(hProcess,
@@ -643,14 +725,14 @@ Debugger::UserCommand Debugger::UserInputLoop(const DEBUG_EVENT& DebugEv, const 
                     Memory.get(),
                     Length * sizeof(BYTE), nullptr), continue);
 
-                for (DWORD64 i = 0; i < Length; ++i)
+                for (SIZE_T i = 0; i < Length; ++i)
                 {
                     if ((i % LineLength) == 0)
                         _tprintf(_T("%p: "), (LPCVOID) (Address + i));
                     _tprintf(_T("%02x "), Memory[i]);
                     if (((i + 1) % LineLength) == 0)
                     {
-                        for (DWORD64 j = i + 1 - LineLength; j <= i; ++j)
+                        for (SIZE_T j = i + 1 - LineLength; j <= i; ++j)
                         {
                             printf("%c", std::isprint(Memory[j]) ? Memory[j] : '.');
                         }
@@ -668,19 +750,19 @@ Debugger::UserCommand Debugger::UserInputLoop(const DEBUG_EVENT& DebugEv, const 
         }
         else if (args[0] == TEXT("source"))
         {
-            IMAGEHLP_LINE64 line = {};
-            line.SizeOfStruct = sizeof(IMAGEHLP_LINE64);
+            IMAGEHLP_LINE line = {};
+            line.SizeOfStruct = sizeof(IMAGEHLP_LINE);
             DWORD disp = 0;
-            if (!SymGetLineFromAddr64(hProcess, (DWORD64) ExceptionRecord.ExceptionAddress, &disp, &line))
+            if (!SymGetLineFromAddr(hProcess, (DWORD64) ExceptionRecord.ExceptionAddress, &disp, &line))
             {
                 _tprintf(_T("No source data\n"));
                 continue;
             }
 
-            _tprintf(_T("%s:%d+%d\n"), line.FileName, line.LineNumber, disp);
+            _tprintf(_T("%s:%d+%d\n"), FIXFILENAME(line.FileName), line.LineNumber, disp);
 
             FILE* f = nullptr;
-            _tfopen_s(&f, line.FileName, _T("r"));
+            _tfopen_s(&f, FIXFILENAME(line.FileName), _T("r"));
             if (f != nullptr)
             {
                 TCHAR linestr[1024];
@@ -696,7 +778,7 @@ Debugger::UserCommand Debugger::UserInputLoop(const DEBUG_EVENT& DebugEv, const 
                 fclose(f);
             }
             else
-                _ftprintf(stderr, _T(COLOR_ERROR "Error: fopen_s %s %d" COLOR_RETURN "\n"), line.FileName, errno);
+                _ftprintf(stderr, _T(COLOR_ERROR "Error: fopen_s %s %d" COLOR_RETURN "\n"), FIXFILENAME(line.FileName), errno);
         }
         else if (args[0] == TEXT("bp"))
         {
@@ -813,7 +895,12 @@ Debugger::UserCommand Debugger::UserInputLoop(const DEBUG_EVENT& DebugEv, const 
                 imghlp_frame.InstructionOffset = (ULONG64) stack.front().AddrPC.Offset;
                 CHECK_IGNORE(SymSetContext(hProcess, &imghlp_frame, nullptr), ERROR_SUCCESS, continue);
 
-                EnumSymProcData espdata = { hProcess, SYMFLAG_LOCAL, lcContext.Rbp != 0 ? &lcContext : nullptr};
+#ifdef _M_IX86
+                DWORD bp = lcContext.Ebp;
+#elif _M_X64
+                DWORD64 bp = lcContext.Rbp;
+#endif
+                EnumSymProcData espdata = { hProcess, SYMFLAG_LOCAL, bp != 0 ? &lcContext : nullptr};
                 CHECK(SymEnumSymbols(hProcess, 0, Mask, EnumSymProc, &espdata), continue);
             }
         }
@@ -836,7 +923,12 @@ Debugger::UserCommand Debugger::UserInputLoop(const DEBUG_EVENT& DebugEv, const 
                 imghlp_frame.InstructionOffset = (ULONG64) stack.front().AddrPC.Offset;
                 CHECK_IGNORE(SymSetContext(hProcess, &imghlp_frame, nullptr), ERROR_SUCCESS, continue);
 
-                EnumSymProcData espdata = { hProcess, SYMFLAG_PARAMETER, lcContext.Rbp != 0 ? &lcContext : nullptr };
+#ifdef _M_IX86
+                DWORD bp = lcContext.Ebp;
+#elif _M_X64
+                DWORD64 bp = lcContext.Rbp;
+#endif
+                EnumSymProcData espdata = { hProcess, SYMFLAG_PARAMETER, bp != 0 ? &lcContext : nullptr };
                 CHECK(SymEnumSymbols(hProcess, 0, Mask, EnumSymProc, &espdata), continue);
             }
         }
@@ -871,7 +963,7 @@ DWORD Debugger::OnExceptionDebugEvent(const DEBUG_EVENT& DebugEv, const EXCEPTIO
     case EXCEPTION_ACCESS_VIOLATION:
         // First chance: Pass this on to the system. 
         // Last chance: Display an appropriate error. 
-        _tprintf(_T(COLOR_MESSAGE "Access violation: " COLOR_RETURN "%s 0x%p (%llu), %llu)\n"),
+        _tprintf(_T(COLOR_MESSAGE "Access violation: " COLOR_RETURN "%s 0x%p (%Iu), %Iu)\n"),
             DebugEv.u.Exception.dwFirstChance ? _T("First-chance") : _T("Last-chance"),
             ExceptionRecord.ExceptionAddress, 
             ExceptionRecord.ExceptionInformation[0], ExceptionRecord.ExceptionInformation[1]);
@@ -961,14 +1053,14 @@ DWORD Debugger::OnExceptionDebugEvent(const DEBUG_EVENT& DebugEv, const EXCEPTIO
 
         if (m_LastCmd == UserCommand::STEP_IN)
         {
-            IMAGEHLP_LINE64 line = {};
-            line.SizeOfStruct = sizeof(IMAGEHLP_LINE64);
+            IMAGEHLP_LINE line = {};
+            line.SizeOfStruct = sizeof(IMAGEHLP_LINE);
             DWORD disp = 0;
-            CHECK(SymGetLineFromAddr64(hProcess, (DWORD64) ExceptionRecord.ExceptionAddress, &disp, &line), DoUserInputLoop = true)
+            CHECK(SymGetLineFromAddr(hProcess, (DWORD64) ExceptionRecord.ExceptionAddress, &disp, &line), DoUserInputLoop = true)
             else
             {
                 if (line.LineNumber == m_CurrentLine.LineNumber
-                    && (line.FileName == m_CurrentLine.FileName || _tcscpy_s(line.FileName, MAX_PATH, m_CurrentLine.FileName) == 0))
+                    && (FIXFILENAME(line.FileName) == FIXFILENAME(m_CurrentLine.FileName) || _tcscpy_s(FIXFILENAME(line.FileName), MAX_PATH, FIXFILENAME(m_CurrentLine.FileName)) == 0))
                     AdjustThreadContext(hProcess, hThread, SET_TRAP);
                 else
                     DoUserInputLoop = true;
@@ -998,9 +1090,9 @@ DWORD Debugger::OnExceptionDebugEvent(const DEBUG_EVENT& DebugEv, const EXCEPTIO
             ExceptionRecord.ExceptionCode);
         if (ExceptionRecord.NumberParameters > 0)
         {
-            _tprintf(_T(" (%llu"), ExceptionRecord.ExceptionInformation[0]);
+            _tprintf(_T(" (%Iu"), ExceptionRecord.ExceptionInformation[0]);
             for (DWORD i = 1; i < ExceptionRecord.NumberParameters; ++i)
-                _tprintf(_T(", %llu"), ExceptionRecord.ExceptionInformation[i]);
+                _tprintf(_T(", %Iu"), ExceptionRecord.ExceptionInformation[i]);
             _tprintf(_T(")"));
         }
         _tprintf(_T("\n"));
@@ -1024,9 +1116,9 @@ DWORD Debugger::OnExceptionDebugEvent(const DEBUG_EVENT& DebugEv, const EXCEPTIO
             ExceptionRecord.ExceptionCode);
         if (ExceptionRecord.NumberParameters > 0)
         {
-            _tprintf(_T(" (%llu"), ExceptionRecord.ExceptionInformation[0]);
+            _tprintf(_T(" (%Iu"), ExceptionRecord.ExceptionInformation[0]);
             for (DWORD i = 1; i < ExceptionRecord.NumberParameters; ++i)
-                _tprintf(_T(", %llu"), ExceptionRecord.ExceptionInformation[i]);
+                _tprintf(_T(", %Iu"), ExceptionRecord.ExceptionInformation[i]);
             _tprintf(_T(")"));
         }
         _tprintf(_T("\n"));
