@@ -13,17 +13,14 @@ static void ShowTypeData(HANDLE hProcess, DWORD64 ModBase, ULONG TypeId)
     CHECK(SymGetTypeInfo(hProcess, ModBase, TypeId, TI_GET_SYMNAME, &pName), 0)
     else
     {
-        _tprintf(_T(" " COLOR_TYPENAME "%s" COLOR_RETURN), pName);
-        LocalFree(pName);
-    }
+        DWORD TypeIndex = 0;
+        CHECK(SymGetTypeInfo(hProcess, ModBase, TypeId, TI_GET_TYPEID, &TypeIndex), 0)
+        else
+        {
+            ShowType(hProcess, ModBase, TypeIndex, pName, 0);
+        }
 
-    DWORD TypeIndex = 0;
-    CHECK(SymGetTypeInfo(hProcess, ModBase, TypeId, TI_GET_TYPEID, &TypeIndex), 0)
-    else
-    {
-        _tprintf(_T(":("));
-        ShowType(hProcess, ModBase, TypeIndex, nullptr, 0);
-        _tprintf(_T(")"));
+        LocalFree(pName);
     }
 
     DWORD dataKind = 0;
@@ -197,18 +194,18 @@ static void ShowTypeFunctionType(HANDLE hProcess, DWORD64 ModBase, ULONG TypeId,
         auto pFC = zmalloc<TI_FINDCHILDREN_PARAMS>(NumChildren * sizeof(ULONG));
         pFC->Count = NumChildren;
         CHECK(SymGetTypeInfo(hProcess, ModBase, TypeId, TI_FINDCHILDREN, pFC.get()), 0)
-    else
-    {
-        _tprintf(_T("("));
-        for (DWORD i = 0; i < NumChildren; ++i)
+        else
         {
-            if (i != 0)
-                _tprintf(_T(","));
-            //_tprintf(_T(" %u"), pFC->ChildId[i]);
-            ShowType(hProcess, ModBase, pFC->ChildId[i], nullptr, 0);
+            _tprintf(_T("("));
+            for (DWORD i = 0; i < NumChildren; ++i)
+            {
+                if (i != 0)
+                    _tprintf(_T(","));
+                //_tprintf(_T(" %u"), pFC->ChildId[i]);
+                ShowType(hProcess, ModBase, pFC->ChildId[i], nullptr, 0);
+            }
+            _tprintf(_T(")"));
         }
-        _tprintf(_T(")"));
-    }
 #endif
     }
 }

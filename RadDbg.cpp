@@ -59,7 +59,8 @@ BOOL CALLBACK EnumSymProc(PSYMBOL_INFO pSymInfo, ULONG SymbolSize, PVOID UserCon
         if (pSymInfo->TypeIndex == 0)
         {
             _tprintf(_T(" " COLOR_NAME "%s" COLOR_RETURN "\n"), pSymInfo->Name); // TODO
-            MYASSERT((pSymInfo->Flags & (SYMFLAG_VALUEPRESENT | SYMFLAG_REGISTER | SYMFLAG_REGREL | SYMFLAG_FRAMEREL)) == 0);
+            //MYASSERT((pSymInfo->Flags & (SYMFLAG_VALUEPRESENT | SYMFLAG_REGISTER | SYMFLAG_REGREL | SYMFLAG_FRAMEREL)) == 0);
+            MYASSERT((pSymInfo->Flags & ~(SYMFLAG_PUBLIC_CODE)) == 0);
         }
         else
         {
@@ -83,12 +84,15 @@ BOOL CALLBACK EnumSymProc(PSYMBOL_INFO pSymInfo, ULONG SymbolSize, PVOID UserCon
                 break;
             case SYMFLAG_NULL:
                 _tprintf(_T(" = NULL"));
+                NOT_IMPLEMENTED;
                 break;
             case SYMFLAG_VALUEPRESENT:
                 _tprintf(_T(" = v:%llu"), pSymInfo->Value);
+                NOT_IMPLEMENTED;
                 break;
             case SYMFLAG_REGISTER:
                 _tprintf(_T(" = r:%lu"), pSymInfo->Register);
+                NOT_IMPLEMENTED;
                 break;
             case SYMFLAG_REGREL:
                 if (pData->pContext != nullptr)
@@ -535,6 +539,7 @@ Debugger::UserCommand Debugger::UserInputLoop(const DEBUG_EVENT& DebugEv, const 
             line.SizeOfStruct = sizeof(IMAGEHLP_LINE64);
             DWORD disp = 0;
             CHECK(SymGetLineFromAddr64(hProcess, (DWORD64) ExceptionRecord.ExceptionAddress, &disp, &line), continue);
+            // TODO Handle next when there is no source code
 
             // TODO what if this is the last or is return statement
 
@@ -545,6 +550,10 @@ Debugger::UserCommand Debugger::UserInputLoop(const DEBUG_EVENT& DebugEv, const 
             AddTempBreakpoint(hProcess, line.Address, dwThreadId);
 
             // TODO Also set breakpoint on any jumps in case it branches or loops
+
+            std::vector<STACKFRAME64> stack = GetCallstack(hProcess, hThread);
+
+            AddTempBreakpoint(hProcess, stack.front().AddrReturn.Offset, dwThreadId);
 
             return UserCommand::CONT;
         }

@@ -5,6 +5,7 @@
 
 #include "cvconst.h"
 
+#include "Types.h"
 #include "Utils.h"
 
 DWORD64 GetRegValue(ULONG reg, const CONTEXT& context)
@@ -56,12 +57,16 @@ static void ShowValueData(HANDLE hProcess, DWORD64 ModBase, ULONG TypeId, DWORD6
         {
             // Use Offset; Address is not defined
 
-            ULONG Offset = 0;
-            CHECK(SymGetTypeInfo(hProcess, ModBase, TypeId, TI_GET_OFFSET, &Offset), 0)
+            DWORD DataTypeId = 0;
+            CHECK(SymGetTypeInfo(hProcess, ModBase, TypeId, TI_GET_TYPE, &DataTypeId), 0)
             else
             {
-                printf(" Offset %u", Offset);
-                NOT_IMPLEMENTED;
+                ULONG Offset = 0;
+                CHECK(SymGetTypeInfo(hProcess, ModBase, TypeId, TI_GET_OFFSET, &Offset), 0)
+                else
+                {
+                    ShowValue(hProcess, ModBase, DataTypeId, Address + Offset);
+                }
             }
         }
         break;
@@ -99,7 +104,83 @@ static void ShowValueData(HANDLE hProcess, DWORD64 ModBase, ULONG TypeId, DWORD6
 
 static void ShowValueUDT(HANDLE hProcess, DWORD64 ModBase, ULONG TypeId, DWORD64 Address)
 {
-    // TODO Show some member values
+    wprintf(L" {");
+    DWORD NumChildren = 0;
+    CHECK(SymGetTypeInfo(hProcess, ModBase, TypeId, TI_GET_CHILDRENCOUNT, &NumChildren), 0)
+    else
+    {
+        auto pFC = zmalloc<TI_FINDCHILDREN_PARAMS>(NumChildren * sizeof(ULONG));
+        pFC->Count = NumChildren;
+        CHECK(SymGetTypeInfo(hProcess, ModBase, TypeId, TI_FINDCHILDREN, pFC.get()), 0)
+        else
+        {
+            for (DWORD i = 0; i < NumChildren; ++i)
+            {
+                if (i != 0)
+                    wprintf(L",");
+
+                ULONG ChildTypeId = pFC->ChildId[i];
+
+                // TODO Is it possible to get the name of this child
+                ShowType(hProcess, ModBase, ChildTypeId, nullptr, 0);
+
+                wprintf(L" =");
+
+                ShowValue(hProcess, ModBase, ChildTypeId, Address);
+            }
+        }
+    }
+    wprintf(L" }");
+}
+
+LONGLONG VariantToInt64(_In_ REFVARIANT var)
+{
+    MYASSERT(IsVarTypeSignedInteger(var.vt));
+    switch (var.vt)
+    {
+    case VT_I1: return var.cVal;
+    case VT_I2: return var.iVal;
+    case VT_I4: return var.lVal;
+    case VT_I8: return var.llVal;
+    default:    return 0;
+    }
+}
+
+LONGLONG VariantToUInt64(_In_ REFVARIANT var)
+{
+    MYASSERT(IsVarTypeUnsignedInteger(var.vt));
+    switch (var.vt)
+    {
+    case VT_UI1: return var.bVal;
+    case VT_UI2: return var.uiVal;
+    case VT_UI4: return var.ulVal;
+    case VT_UI8: return var.ullVal;
+    default:    return 0;
+    }
+}
+
+static int MyVariantCompare(_In_ REFVARIANT var1, _In_ REFVARIANT var2)
+{
+    if (var1.vt == var2.vt)
+        return VariantCompare(var1, var2);
+    else if (IsVarTypeSignedInteger(var1.vt) && IsVarTypeSignedInteger(var1.vt))
+    {
+        VARIANT var1_64;
+        InitVariantFromInt64(VariantToInt64(var1), &var1_64);
+        VARIANT var2_64;
+        InitVariantFromInt64(VariantToInt64(var2), &var2_64);
+        return VariantCompare(var1_64, var2_64);
+    }
+    else if (IsVarTypeUnsignedInteger(var1.vt) && IsVarTypeUnsignedInteger(var1.vt))
+    {
+        VARIANT var1_64;
+        InitVariantFromUInt64(VariantToUInt64(var1), &var1_64);
+        VARIANT var2_64;
+        InitVariantFromUInt64(VariantToUInt64(var2), &var2_64);
+        return VariantCompare(var1_64, var2_64);
+    }
+    else
+        return -1;
 }
 
 static void ShowValueEnumChild(HANDLE hProcess, DWORD64 ModBase, ULONG TypeId, VARIANT value)
@@ -135,7 +216,7 @@ static void ShowValueEnumChild(HANDLE hProcess, DWORD64 ModBase, ULONG TypeId, V
                 CHECK(SymGetTypeInfo(hProcess, ModBase, ChildTypeId, TI_GET_VALUE, &var), 0)
                 else
                 {
-                    if (var.vt == value.vt && VariantCompare(var, value) == 0)
+                    if (MyVariantCompare(var, value) == 0)
                     {
                         found = true;
 
@@ -200,7 +281,8 @@ static void ShowValuePointerType(HANDLE hProcess, DWORD64 ModBase, ULONG TypeId,
         else
         {
             printf(" :");
-            ShowValue(hProcess, ModBase, Type, NewAddress);
+            if (NewAddress != 0)
+                ShowValue(hProcess, ModBase, Type, NewAddress);
         }
     }
     else
@@ -301,9 +383,11 @@ static void ShowValueBaseType(HANDLE hProcess, DWORD64 ModBase, ULONG TypeId, DW
             WCHAR   vwchar;
             DWORD64 value;
             INT8 vint8;
+            INT16 vint16;
             INT32 vint32;
             INT64 vint64;
             UINT8 uint8;
+            UINT16 uint16;
             UINT32 uint32;
             UINT64 uint64;
         };
@@ -324,7 +408,8 @@ static void ShowValueBaseType(HANDLE hProcess, DWORD64 ModBase, ULONG TypeId, DW
                 switch (Length)
                 {
                 case sizeof(vint8)  : printf(" %d", vint8); /*if (pValue) InitVariantFromInt8(vint8, pValue);*/ break;
-                case sizeof(vint32) : printf(" %d", vint32); if (pValue) InitVariantFromInt16(vint32, pValue); break;
+                case sizeof(vint16) : printf(" %d", vint32); if (pValue) InitVariantFromInt16(vint32, pValue); break;
+                case sizeof(vint32) : printf(" %d", vint32); if (pValue) InitVariantFromInt32(vint32, pValue); break;
                 case sizeof(vint64) : printf(" %lld", vint64); if (pValue) InitVariantFromInt64(vint64, pValue); break;
                 default: NOT_IMPLEMENTED; break;
                 }
@@ -334,6 +419,7 @@ static void ShowValueBaseType(HANDLE hProcess, DWORD64 ModBase, ULONG TypeId, DW
                 switch (Length)
                 {
                 case sizeof(uint8)  : printf(" %u", uint8); /*if (pValue) InitVariantFromUInt8(uint8, pValue);*/ break;
+                case sizeof(uint16) : printf(" %u", uint32); if (pValue) InitVariantFromUInt16(uint16, pValue); break;
                 case sizeof(uint32) : printf(" %u", uint32); if (pValue) InitVariantFromUInt32(uint32, pValue); break;
                 case sizeof(uint64) : printf(" %llu", uint64); if (pValue) InitVariantFromUInt64(uint64, pValue); break;
                 default: NOT_IMPLEMENTED; break;
