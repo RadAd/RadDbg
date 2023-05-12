@@ -152,7 +152,7 @@ static void ShowTypeFunctionType(HANDLE hProcess, DWORD64 ModBase, ULONG TypeId,
     DWORD NumArgs = 0;
     CHECK(SymGetTypeInfo(hProcess, ModBase, TypeId, TI_GET_COUNT, &NumArgs), 0)
 
-        DWORD CallConv = 0;
+    DWORD CallConv = 0;
     CHECK(SymGetTypeInfo(hProcess, ModBase, TypeId, TI_GET_CALLING_CONVENTION, &CallConv), 0)
     else
     {

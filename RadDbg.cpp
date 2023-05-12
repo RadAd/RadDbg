@@ -1387,7 +1387,6 @@ void Debugger::DoEventLoop()
 
         if (DebugEv.dwDebugEventCode == EXIT_PROCESS_DEBUG_EVENT or m_LastCmd == UserCommand::EXIT)
         {
-            // TODO Kill or release the process
             bContinue = false;
         }
     }

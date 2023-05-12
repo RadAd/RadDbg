@@ -27,7 +27,6 @@ void ShowValueBaseType(HANDLE hProcess, DWORD64 ModBase, ULONG TypeId, DWORD64 A
 
 static void ShowValueData(HANDLE hProcess, DWORD64 ModBase, ULONG TypeId, DWORD64 Address)
 {
-    // TODO Show some member values
     DWORD dataKind = 0;
     CHECK(SymGetTypeInfo(hProcess, ModBase, TypeId, TI_GET_DATAKIND, &dataKind), 0)
     else
@@ -126,7 +125,6 @@ static void ShowValueUDT(HANDLE hProcess, DWORD64 ModBase, ULONG TypeId, DWORD64
 
                 ULONG ChildTypeId = pFC->ChildId[i];
 
-                // TODO Is it possible to get the name of this child
                 ShowType(hProcess, ModBase, ChildTypeId, nullptr, 0);
 
                 wprintf(L" =");
@@ -190,7 +188,6 @@ static int MyVariantCompare(_In_ REFVARIANT var1, _In_ REFVARIANT var2)
 
 static void ShowValueEnumChild(HANDLE hProcess, DWORD64 ModBase, ULONG TypeId, VARIANT value)
 {
-    // TODO Only want to show the enum value for the current value of the variable
     bool found = false;
 
     DWORD NumChildren = 0;
@@ -264,7 +261,7 @@ static void ShowValueEnum(HANDLE hProcess, DWORD64 ModBase, ULONG TypeId, DWORD6
 static void ShowValueFunctionType(HANDLE hProcess, DWORD64 ModBase, ULONG TypeId, DWORD64 Address)
 {
     printf(" 0x%p", (PVOID) Address);
-    // TODO What else to show??
+    // TODO What else to show?? Maybe look up its symbols name
 }
 
 static void ShowValuePointerType(HANDLE hProcess, DWORD64 ModBase, ULONG TypeId, DWORD64 Address)
@@ -440,7 +437,7 @@ static void ShowValueBaseType(HANDLE hProcess, DWORD64 ModBase, ULONG TypeId, DW
                 //case btBit: printf(" bit"); break;
                 //case btBSTR: printf(" BSTR"); break;
                 //case btHresult: printf(" HResult"); break;
-            default: printf(" TODO ShowValueBaseType:%d", BaseType); NOT_IMPLEMENTED; break;
+            default: printf(" ShowValueBaseType:%d", BaseType); NOT_IMPLEMENTED; break;
             }
         }
     }
