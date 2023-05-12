@@ -260,8 +260,15 @@ static void ShowValueEnum(HANDLE hProcess, DWORD64 ModBase, ULONG TypeId, DWORD6
 
 static void ShowValueFunctionType(HANDLE hProcess, DWORD64 ModBase, ULONG TypeId, DWORD64 Address)
 {
-    printf(" 0x%p", (PVOID) Address);
-    // TODO What else to show?? Maybe look up its symbols name
+    auto pSymbol = zmalloc<IMAGEHLP_SYMBOL>(MAX_SYM_NAME);
+    pSymbol->SizeOfStruct = sizeof(IMAGEHLP_SYMBOL);
+    DWORD64 disp;
+    CHECK(SymGetSymFromAddr(hProcess, Address, &disp, pSymbol.get()), 0)
+    else
+    {
+        if (pSymbol->Name[0] != TEXT('\0'))
+            printf(" : %s", pSymbol->Name);
+    }
 }
 
 static void ShowValuePointerType(HANDLE hProcess, DWORD64 ModBase, ULONG TypeId, DWORD64 Address)
@@ -282,7 +289,6 @@ static void ShowValuePointerType(HANDLE hProcess, DWORD64 ModBase, ULONG TypeId,
         CHECK(SymGetTypeInfo(hProcess, ModBase, TypeId, TI_GET_TYPE, &Type), 0)
         else
         {
-            printf(" :");
             if (NewAddress != 0)
                 ShowValue(hProcess, ModBase, Type, NewAddress);
         }
