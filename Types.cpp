@@ -156,7 +156,19 @@ static void ShowTypeFunctionType(HANDLE hProcess, DWORD64 ModBase, ULONG TypeId,
     CHECK(SymGetTypeInfo(hProcess, ModBase, TypeId, TI_GET_CALLING_CONVENTION, &CallConv), 0)
     else
     {
-        // TODO CV_call_e;
+        switch ((enum CV_call_e) CallConv)
+        {
+        case CV_CALL_NEAR_C: _tprintf(_T(" CDECL")); break;
+        case CV_CALL_FAR_C: _tprintf(_T(" FAR CDECL")); break;
+        case CV_CALL_NEAR_PASCAL: _tprintf(_T(" PASCAL")); break;
+        case CV_CALL_FAR_PASCAL: _tprintf(_T(" FAR PASCAL")); break;
+        case CV_CALL_NEAR_FAST: _tprintf(_T(" FASTCALL")); break;
+        case CV_CALL_FAR_FAST: _tprintf(_T(" FAR FASTCALL")); break;
+        case CV_CALL_SKIPPED: _tprintf(_T(" SKIPPED")); break;
+        case CV_CALL_NEAR_STD: _tprintf(_T(" STDCALL")); break;
+        case CV_CALL_FAR_STD: _tprintf(_T(" FAR STDCALL")); break;
+        default: printf(" Unknown calling convention %d", CallConv); NOT_IMPLEMENTED; break;
+        }
     }
 
     if (pointer > 0)
