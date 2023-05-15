@@ -398,6 +398,8 @@ static void ShowValueBaseType(HANDLE hProcess, DWORD64 ModBase, ULONG TypeId, DW
             UINT16 uint16;
             UINT32 uint32;
             UINT64 uint64;
+            float f16;
+            double f32;
         };
         MYASSERT(Length <= sizeof(value));
         SIZE_T dwReadWriteBytes;
@@ -435,6 +437,15 @@ static void ShowValueBaseType(HANDLE hProcess, DWORD64 ModBase, ULONG TypeId, DW
                 break;
                 //case btFloat: printf(" float"); break;
                 //case btBCD: printf(" bcd"); break;
+            case btFloat:
+                switch (Length)
+                {
+                    // TODO Why is a float in the source showing of size 8
+                    //case sizeof(f16) : printf(" %f", f16); if (pValue) InitVariantFromDouble(f16, pValue); break;
+                    case sizeof(f32) : printf(" %f", f32); if (pValue) InitVariantFromDouble(f32, pValue); break;
+                    default: NOT_IMPLEMENTED; break;
+                }
+                break;
             case btBool: MYASSERT(Length == sizeof(vchar));  printf(" %d (%s)", vchar, vchar ? "true" : "false"); break;
                 //case btCurrency: printf(" currency"); break;
                 //case btDate: printf(" dat"); break;
