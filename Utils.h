@@ -56,3 +56,9 @@ std::unique_ptr<T, FreeDeleter> zmalloc(size_t extra)
     memset(p.get(), 0, size);
     return p;
 }
+
+template <class T, class P>
+void erase_if(std::vector<T>& v, P pred)
+{
+    v.erase(std::remove_if(v.begin(), v.end(), pred), v.end());
+}

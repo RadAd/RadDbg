@@ -46,6 +46,7 @@ SymGetLineFromNameW(
 #include <algorithm>
 #include <map>
 #include <cinttypes>
+#include <algorithm>
 
 #include "Utils.h"
 #include "Types.h"
@@ -1254,6 +1255,8 @@ DWORD Debugger::OnExitProcessDebugEvent(const DEBUG_EVENT& DebugEv, const EXIT_P
 
     m_Processes.erase(DebugEv.dwProcessId);
 
+    erase_if(m_breakpoints, [hProcess](const BreakPoint& bp) { return bp.hProcess == hProcess; });
+
     return DBG_CONTINUE;
 }
 
@@ -1390,6 +1393,13 @@ void Debugger::DoEventLoop()
             bContinue = false;
         }
     }
+
+    for (BreakPoint& bp : m_tempbreakpoints)
+        bp.Unset();
+    m_tempbreakpoints.clear();
+    for (BreakPoint& bp : m_breakpoints)
+        bp.Unset();
+    m_breakpoints.clear();
 }
 
 BOOL StartDebugProcess(const int argc, const TCHAR* argv[])
