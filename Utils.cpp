@@ -18,6 +18,30 @@ void ShowAssert(LPCTSTR msg, LPCTSTR file, int line)
         DebugBreak();
 }
 
+std::vector<std::string> split(const std::string& s, char delim)
+{
+    std::vector<std::string> result;
+    std::stringstream ss(s);
+    std::string item;
+
+    while (getline(ss, item, delim))
+        result.push_back(item);
+
+    return result;
+}
+
+std::vector<std::wstring> split(const std::wstring& s, wchar_t delim)
+{
+    std::vector<std::wstring> result;
+    std::wstringstream ss(s);
+    std::wstring item;
+
+    while (getline(ss, item, delim))
+        result.push_back(item);
+
+    return result;
+}
+
 std::vector<std::string> split_quoted(const std::string& str)
 {
     std::vector<std::string> ret;

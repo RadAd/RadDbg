@@ -19,6 +19,7 @@
 #define SymGetLineFromName SymGetLineFromNameW
 #define SymGetLineNext SymGetLineNextW
 #define SymGetModuleInfo SymGetModuleInfoW
+#endif
 
 // TODO Missing declaration in DbgHelp
 extern "C" {
@@ -33,9 +34,23 @@ SymGetLineFromNameW(
     _Inout_ PIMAGEHLP_LINEW Line
 );
 }
-#endif
 #else
 #define FIXFILENAME(x) (x)
+#ifdef  UNICODE
+#undef SymGetSymFromName
+#define SymGetSymFromName SymGetSymFromNameW64
+#endif
+
+// TODO Missing declaration in DbgHelp
+extern "C" {
+BOOL
+IMAGEAPI
+SymGetSymFromNameW64(
+    _In_ HANDLE hProcess,
+    _In_ PCWSTR Name,
+    _Inout_ PIMAGEHLP_SYMBOLW64 Symbol
+);
+}
 #endif
 
 #include <cstdio>
@@ -62,12 +77,8 @@ struct EnumSymProcData
     CONTEXT* pContext;
 };
 
-BOOL CALLBACK EnumSymProc(PSYMBOL_INFO pSymInfo, ULONG SymbolSize, PVOID UserContext)
+BOOL ShowSymbol(const PSYMBOL_INFO pSymInfo, const EnumSymProcData* pData, const std::vector<std::tstring>* pFilter)
 {
-    MYASSERT(SymbolSize == pSymInfo->Size);
-
-    const EnumSymProcData* pData = (EnumSymProcData*) UserContext;
-
     // https://accu.org/journals/overload/29/165/orr/
 
     if (pData->FlagMask == 0 or pSymInfo->Flags & pData->FlagMask)
@@ -103,25 +114,23 @@ BOOL CALLBACK EnumSymProc(PSYMBOL_INFO pSymInfo, ULONG SymbolSize, PVOID UserCon
                     MYASSERT(Length == pSymInfo->Size);
             }
 
-            // https://www.debuginfo.com/articles/dbghelptypeinfo.html
-            ShowType(pData->hProcess, pSymInfo->ModBase, pSymInfo->TypeIndex, pSymInfo->Name, 0);
+            FoundValue fv = { pSymInfo->TypeIndex, pSymInfo->Address };
 
             switch (pSymInfo->Flags & (SYMFLAG_NULL | SYMFLAG_VALUEPRESENT | SYMFLAG_REGISTER | SYMFLAG_REGREL))
             {
             case 0:
-                _tprintf(_T(" ="));
-                ShowValue(pData->hProcess, pSymInfo->ModBase, pSymInfo->TypeIndex, pSymInfo->Address);
+                ShowValue(pData->hProcess, pSymInfo->ModBase, fv.TypeId, fv.Address);
                 break;
             case SYMFLAG_NULL:
-                _tprintf(_T(" = NULL"));
+                _tprintf(_T(" NULL"));
                 NOT_IMPLEMENTED;
                 break;
             case SYMFLAG_VALUEPRESENT:
-                _tprintf(_T(" = v:%llu"), pSymInfo->Value);
+                _tprintf(_T(" v:%llu"), pSymInfo->Value);
                 NOT_IMPLEMENTED;
                 break;
             case SYMFLAG_REGISTER:
-                _tprintf(_T(" = r:%lu"), pSymInfo->Register);
+                _tprintf(_T(" r:%lu"), pSymInfo->Register);
                 NOT_IMPLEMENTED;
                 break;
             case SYMFLAG_REGREL:
@@ -131,22 +140,56 @@ BOOL CALLBACK EnumSymProc(PSYMBOL_INFO pSymInfo, ULONG SymbolSize, PVOID UserCon
                     DWORD64 regvalue = GetRegValue(pSymInfo->Register, *pData->pContext);
                     //MYASSERT(regvalue != 0);
                     //_tprintf(_T(" Address:%llu + %llu"), regvalue, pSymInfo->Address);
-                    MYASSERT(pSymInfo->Address >= 0 && pSymInfo->Address <= 0x7fffffff); // TODO Handle negative offset
-                    DWORD64 Address = regvalue + pSymInfo->Address;
-
-                    _tprintf(_T(" ="));
-                    ShowValue(pData->hProcess, pSymInfo->ModBase, pSymInfo->TypeIndex, Address);
+                    MYASSERT(fv.Address >= 0 && fv.Address <= 0x7fffffff); // TODO Handle negative offset
+                    fv.Address += regvalue;
                 }
+                else
+                    fv.Address = 0;
                 break;
             default:
                 NOT_IMPLEMENTED;
                 break;
             }
 
+            std::wstring strSymName = pSymInfo->Name;
+
+            if (pFilter)
+            {
+                for (const std::wstring& strName : *pFilter)
+                {
+                    if (&strName == &pFilter->front())
+                        continue;
+
+                    fv = FindValue(pData->hProcess, pSymInfo->ModBase, fv.TypeId, fv.Address, strName.c_str());
+                    if (fv.TypeId == (ULONG) -1)
+                    {
+                        _tprintf(_T(" Not found\n"));
+                        return FALSE;
+                    }
+
+                    strSymName += L"." + strName;
+                }
+            }
+
+            // https://www.debuginfo.com/articles/dbghelptypeinfo.html
+            ShowType(pData->hProcess, pSymInfo->ModBase, fv.TypeId, strSymName.c_str(), 0);
+
+            _tprintf(_T(" ="));
+            ShowValue(pData->hProcess, pSymInfo->ModBase, fv.TypeId, fv.Address);
+
             _tprintf(_T("\n"));
         }
     }
     return TRUE;
+}
+
+BOOL CALLBACK EnumSymProc(PSYMBOL_INFO pSymInfo, ULONG SymbolSize, PVOID UserContext)
+{
+    MYASSERT(SymbolSize == pSymInfo->Size);
+
+    const EnumSymProcData* pData = (EnumSymProcData*) UserContext;
+
+    return ShowSymbol(pSymInfo, pData, nullptr);
 }
 
 LPCTSTR GetSymType(SYM_TYPE SymType)
@@ -912,12 +955,11 @@ Debugger::UserCommand Debugger::UserInputLoop(const DEBUG_EVENT& DebugEv, const 
                 lcContext.ContextFlags = CONTEXT_ALL;
                 CHECK(GetThreadContext(hThread, &lcContext), continue);
 
-                std::vector<STACKFRAME> stack = GetCallstack(hProcess, hThread);
+                const std::vector<STACKFRAME> stack = GetCallstack(hProcess, hThread);
 
                 LPCTSTR Mask = args.size() >= 2 ? args[1].c_str() : TEXT("*");
 
                 IMAGEHLP_STACK_FRAME imghlp_frame = {};
-                //imghlp_frame.InstructionOffset = (ULONG64) ExceptionRecord.ExceptionAddress;
                 imghlp_frame.InstructionOffset = (ULONG64) stack.front().AddrPC.Offset;
                 CHECK_IGNORE(SymSetContext(hProcess, &imghlp_frame, nullptr), ERROR_SUCCESS, continue);
 
@@ -928,6 +970,41 @@ Debugger::UserCommand Debugger::UserInputLoop(const DEBUG_EVENT& DebugEv, const 
 #endif
                 EnumSymProcData espdata = { hProcess, SYMFLAG_LOCAL, bp != 0 ? &lcContext : nullptr};
                 CHECK(SymEnumSymbols(hProcess, 0, Mask, EnumSymProc, &espdata), continue);
+            }
+        }
+        else if (args[0] == TEXT("value"))
+        {
+            if (args.size() != 2)
+                _tprintf(_T("Usage: value [name]\n"));
+            else
+            {
+                CONTEXT lcContext = {};
+                lcContext.ContextFlags = CONTEXT_ALL;
+                CHECK(GetThreadContext(hThread, &lcContext), continue);
+
+                const std::vector<STACKFRAME> stack = GetCallstack(hProcess, hThread);
+
+                std::vector<std::tstring> filter = split(args.size() >= 2 ? args[1] : TEXT("*"), TEXT('.'));
+
+                LPCTSTR Mask = filter.front().c_str();
+
+                IMAGEHLP_STACK_FRAME imghlp_frame = {};
+                imghlp_frame.InstructionOffset = (ULONG64) stack.front().AddrPC.Offset;
+                CHECK_IGNORE(SymSetContext(hProcess, &imghlp_frame, nullptr), ERROR_SUCCESS, continue);
+
+#ifdef _M_IX86
+                DWORD bp = lcContext.Ebp;
+#elif _M_X64
+                DWORD64 bp = lcContext.Rbp;
+#endif
+                EnumSymProcData espdata = { hProcess, SYMFLAG_LOCAL, bp != 0 ? &lcContext : nullptr };
+
+                auto pSymbol = zmalloc<SYMBOL_INFO>(MAX_SYM_NAME);
+                pSymbol->SizeOfStruct = sizeof(SYMBOL_INFO);
+                pSymbol->MaxNameLen = MAX_SYM_NAME;
+                CHECK(SymFromName(hProcess, Mask, pSymbol.get()), continue);
+
+                ShowSymbol(pSymbol.get(), &espdata, &filter);
             }
         }
         else if (args[0] == TEXT("parameters"))

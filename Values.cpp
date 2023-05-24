@@ -97,6 +97,7 @@ static void ShowValueData(HANDLE hProcess, DWORD64 ModBase, ULONG TypeId, DWORD6
                 }
             }
         }
+        break;
 
         default:
             // Unknown location 
@@ -477,6 +478,124 @@ void ShowValue(HANDLE hProcess, DWORD64 ModBase, ULONG TypeId, DWORD64 Address)
         case SymTagArrayType: ShowValueArrayType(hProcess, ModBase, TypeId, Address); break;
         case SymTagBaseType: ShowValueBaseType(hProcess, ModBase, TypeId, Address, nullptr); break;
         default: printf(" Unknown tag: %u", Tag); NOT_IMPLEMENTED;  break;
+        }
+    }
+}
+
+static FoundValue FindValueUDT(HANDLE hProcess, DWORD64 ModBase, ULONG TypeId, DWORD64 Address, LPCWSTR strName)
+{
+    DWORD NumChildren = 0;
+    CHECK(SymGetTypeInfo(hProcess, ModBase, TypeId, TI_GET_CHILDRENCOUNT, &NumChildren), 0)
+    else
+    {
+        auto pFC = zmalloc<TI_FINDCHILDREN_PARAMS>(NumChildren * sizeof(ULONG));
+        pFC->Count = NumChildren;
+        CHECK(SymGetTypeInfo(hProcess, ModBase, TypeId, TI_FINDCHILDREN, pFC.get()), 0)
+        else
+        {
+            for (DWORD i = 0; i < NumChildren; ++i)
+            {
+                ULONG ChildTypeId = pFC->ChildId[i];
+
+                DWORD Tag = 0;
+                CHECK(SymGetTypeInfo(hProcess, ModBase, ChildTypeId, TI_GET_SYMTAG, &Tag), 0)
+                else
+                {
+                    MYASSERT(((enum SymTagEnum) Tag) == SymTagData);
+
+                    bool found = false;
+
+                    WCHAR* pName = nullptr;
+                    CHECK(SymGetTypeInfo(hProcess, ModBase, ChildTypeId, TI_GET_SYMNAME, &pName), 0)
+                    else
+                    {
+                        if (_wcsicmp(strName, pName) == 0)
+                            found = true;
+                        LocalFree(pName);
+                    }
+
+                    if (found)
+                    {
+                        DWORD dataKind = 0;
+                        CHECK(SymGetTypeInfo(hProcess, ModBase, ChildTypeId, TI_GET_DATAKIND, &dataKind), 0)
+                        else
+                        {
+                            switch ((enum DataKind) dataKind)
+                            {
+                            case DataIsGlobal:
+                            case DataIsStaticLocal:
+                            case DataIsFileStatic:
+                            case DataIsStaticMember:
+                            {
+                                // Use Address; Offset is not defined
+
+                                // Note: If it is DataIsStaticMember, then this is a static member 
+                                // of a class defined in another module 
+                                // (it does not have an address in this module) 
+
+                                ULONG64 DataAddress = 0;
+                                CHECK(SymGetTypeInfo(hProcess, ModBase, ChildTypeId, TI_GET_ADDRESS, &DataAddress), 0)
+                                else
+                                {
+                                    printf(" Address %llu", DataAddress);
+                                    NOT_IMPLEMENTED;
+                                }
+                            }
+                            break;
+
+                            case DataIsLocal:
+                            case DataIsParam:
+                            case DataIsObjectPtr:
+                            case DataIsMember:
+                            {
+                                // Use Offset; Address is not defined
+
+                                DWORD DataTypeId = 0;
+                                CHECK(SymGetTypeInfo(hProcess, ModBase, ChildTypeId, TI_GET_TYPE, &DataTypeId), 0)
+                                else
+                                {
+                                    ULONG Offset = 0;
+                                    CHECK(SymGetTypeInfo(hProcess, ModBase, ChildTypeId, TI_GET_OFFSET, &Offset), 0)
+                                    else
+                                    {
+                                        return { DataTypeId, Address + Offset };
+                                    }
+                                }
+                            }
+                            break;
+
+                            case DataIsConstant:
+                                NOT_IMPLEMENTED;
+                                break;
+
+                            default:
+                                // Unknown location 
+                                NOT_IMPLEMENTED;
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                //ShowValue(hProcess, ModBase, ChildTypeId, Address);
+            }
+        }
+    }
+
+    return { (ULONG) -1 };
+}
+
+FoundValue FindValue(HANDLE hProcess, DWORD64 ModBase, ULONG TypeId, DWORD64 Address, LPCWSTR strName)
+{
+    DWORD Tag = 0;
+    CHECK(SymGetTypeInfo(hProcess, ModBase, TypeId, TI_GET_SYMTAG, &Tag), return { (ULONG) -1 })
+    else
+    {
+        switch ((enum SymTagEnum) Tag)
+        {
+        case SymTagUDT: return FindValueUDT(hProcess, ModBase, TypeId, Address, strName);
+        case SymTagBaseType: return { (ULONG) -1 }; // No sub values
+        default: printf(" Unknown tag: %u", Tag); NOT_IMPLEMENTED; return { (ULONG) -1 };
         }
     }
 }
