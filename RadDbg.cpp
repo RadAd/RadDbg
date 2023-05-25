@@ -685,8 +685,13 @@ Debugger::UserCommand Debugger::UserInputLoop(const DEBUG_EVENT& DebugEv, const 
             // Step-in
             m_CurrentLine.SizeOfStruct = sizeof(IMAGEHLP_LINE);
             DWORD disp = 0;
-            CHECK(SymGetLineFromAddr(hProcess, (DWORD64) ExceptionRecord.ExceptionAddress, &disp, &m_CurrentLine), continue);
-            // TODO Handle step when there is no source code
+            //CHECK(SymGetLineFromAddr(hProcess, (DWORD64) ExceptionRecord.ExceptionAddress, &disp, &m_CurrentLine), continue);
+            if (!SymGetLineFromAddr(hProcess, (DWORD64) ExceptionRecord.ExceptionAddress, &disp, &m_CurrentLine))
+            {
+                // Mark as no source
+                m_CurrentLine.FileName = nullptr;
+                m_CurrentLine.LineNumber = -1;
+            }
 
             AdjustThreadContext(hProcess, hThread, SET_TRAP);
 
@@ -1159,7 +1164,9 @@ DWORD Debugger::OnExceptionDebugEvent(const DEBUG_EVENT& DebugEv, const EXCEPTIO
             IMAGEHLP_LINE line = {};
             line.SizeOfStruct = sizeof(IMAGEHLP_LINE);
             DWORD disp = 0;
-            CHECK(SymGetLineFromAddr(hProcess, (DWORD64) ExceptionRecord.ExceptionAddress, &disp, &line), DoUserInputLoop = true)
+            //CHECK(SymGetLineFromAddr(hProcess, (DWORD64) ExceptionRecord.ExceptionAddress, &disp, &line), DoUserInputLoop = true)
+            if (!SymGetLineFromAddr(hProcess, (DWORD64) ExceptionRecord.ExceptionAddress, &disp, &line))
+                DoUserInputLoop = true;
             else
             {
                 if (line.LineNumber == m_CurrentLine.LineNumber
