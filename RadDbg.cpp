@@ -302,7 +302,9 @@ void ShowStackFrame(HANDLE hProcess, DWORD64 Offset)
     _tprintf(_T("0x%p (%s):"), (LPVOID) Offset, moduleName);
     if (name != nullptr)
         _tprintf(_T(" %s:%lld"), name, offsetFromSmybol);
-    if (lineFileName != nullptr)
+    if (lineFileName != nullptr && Line.LineNumber == 0x00f00f00)
+        _tprintf(_T(" %s:*unknown*"), lineFileName);
+    else if (lineFileName != nullptr)
         _tprintf(_T(" %s:%d"), lineFileName, Line.LineNumber);
     _tprintf(_T("\n"));
 }
@@ -388,6 +390,13 @@ std::vector<STACKFRAME> GetCallstack(HANDLE hProcess, HANDLE hThread)
     return stack;
 }
 
+STACKFRAME GetCurrentStackFrame(HANDLE hProcess, HANDLE hThread)
+{
+    // TODO Just get the first stackframe
+    std::vector<STACKFRAME> stack = GetCallstack(hProcess, hThread);
+    return stack.front();
+}
+
 void ShowThread(HANDLE hProcess, HANDLE hThread, DWORD dwThreadId, BOOL bCurrent)
 {
     _tprintf(_T("%c %5d"), bCurrent ? _T('*') : _T(' '), dwThreadId);
@@ -423,6 +432,8 @@ void ShowThread(HANDLE hProcess, HANDLE hThread, DWORD dwThreadId, BOOL bCurrent
     DWORD dispfn = 0;
     if (!SymGetLineFromAddr(hProcess, ip, &dispfn, &line))
         ; // ShowError(TEXT("SymGetLineFromAddr"), GetLastError());
+    else if (line.LineNumber == 0x00f00f00)
+        _tprintf(_T(" %s:*unknown*"), FIXFILENAME(line.FileName));
     else
         _tprintf(_T(" %s:%d"), FIXFILENAME(line.FileName), line.LineNumber);
 
@@ -576,6 +587,7 @@ protected:
         NONE,
         CONT,
         STEP_IN,
+        STEP_OVER,
         EXIT,
     };
 
@@ -611,6 +623,7 @@ private:
     std::vector<BreakPoint> m_tempbreakpoints;
     BreakPoint* m_pLastBreakPoint = nullptr;
     IMAGEHLP_LINE   m_CurrentLine;
+    DWORD64         m_CurrentFramePtr;
     std::map<LPVOID, std::tstring> m_DLLs;
 };
 
@@ -647,6 +660,10 @@ Debugger::UserCommand Debugger::UserInputLoop(const DEBUG_EVENT& DebugEv, const 
             _tprintf(_T("bp del [symbol]    - delete a breakpoint\n"));
             _tprintf(_T("threads - list threads\n"));
             _tprintf(_T("thread [thread_id] - switch threads\n"));
+            _tprintf(_T("symbols [mask]     - show all symbols\n"));
+            _tprintf(_T("locals [mask]      - show local symbols\n"));
+            _tprintf(_T("parameters [mask]  - show parameter symbols\n"));
+            _tprintf(_T("value [symbol]     - show symbol value\n"));
             _tprintf(_T("detach  - detach debugger\n"));
             _tprintf(_T("exit    - exit debugger\n"));
         }
@@ -657,28 +674,22 @@ Debugger::UserCommand Debugger::UserInputLoop(const DEBUG_EVENT& DebugEv, const 
         else if (args[0] == TEXT("next"))
         {
             // Step-over
-
-            IMAGEHLP_LINE line = {};
-            line.SizeOfStruct = sizeof(IMAGEHLP_LINE);
+            m_CurrentLine.SizeOfStruct = sizeof(IMAGEHLP_LINE);
             DWORD disp = 0;
-            CHECK(SymGetLineFromAddr(hProcess, (DWORD64) ExceptionRecord.ExceptionAddress, &disp, &line), continue);
-            // TODO Handle next when there is no source code
+            //CHECK(SymGetLineFromAddr(hProcess, (DWORD64) ExceptionRecord.ExceptionAddress, &disp, &m_CurrentLine), continue);
+            if (!SymGetLineFromAddr(hProcess, (DWORD64) ExceptionRecord.ExceptionAddress, &disp, &m_CurrentLine))
+            {
+                // Mark as no source
+                m_CurrentLine.FileName = nullptr;
+                m_CurrentLine.LineNumber = -1;
+            }
 
-            // TODO what if this is the last or is return statement
+            AdjustThreadContext(hProcess, hThread, SET_TRAP);
 
-            CHECK(SymGetLineNext(hProcess, &line), continue);
+            const STACKFRAME stackframe = GetCurrentStackFrame(hProcess, hThread);
+            m_CurrentFramePtr = stackframe.AddrFrame.Offset;
 
-            // TODO if get line fails do a STEP_ASM
-
-            AddTempBreakpoint(hProcess, line.Address, dwThreadId);
-
-            // TODO Also set breakpoint on any jumps in case it branches or loops
-
-            std::vector<STACKFRAME> stack = GetCallstack(hProcess, hThread);
-
-            AddTempBreakpoint(hProcess, stack.front().AddrReturn.Offset, dwThreadId);
-
-            return UserCommand::CONT;
+            return UserCommand::STEP_OVER;
         }
         else if (args[0] == TEXT("step"))
         {
@@ -700,9 +711,9 @@ Debugger::UserCommand Debugger::UserInputLoop(const DEBUG_EVENT& DebugEv, const 
         else if (args[0] == TEXT("return"))
         {
             // Step-out
-            std::vector<STACKFRAME> stack = GetCallstack(hProcess, hThread);
+            const STACKFRAME stackframe = GetCurrentStackFrame(hProcess, hThread);
 
-            AddTempBreakpoint(hProcess, stack.front().AddrReturn.Offset, dwThreadId);
+            AddTempBreakpoint(hProcess, stackframe.AddrReturn.Offset, dwThreadId);
 
             // TODO This wont work correctly for recursive functions
             // Maybe add call depth to breakpoint or compare SP?
@@ -824,26 +835,31 @@ Debugger::UserCommand Debugger::UserInputLoop(const DEBUG_EVENT& DebugEv, const 
                 continue;
             }
 
-            _tprintf(_T("%s:%d+%d\n"), FIXFILENAME(line.FileName), line.LineNumber, disp);
-
-            FILE* f = nullptr;
-            _tfopen_s(&f, FIXFILENAME(line.FileName), _T("r"));
-            if (f != nullptr)
-            {
-                TCHAR linestr[1024];
-                int LineNumber = 0;
-                while (_fgetts(linestr, ARRAYSIZE(linestr), f))
-                {
-                    ++LineNumber;
-                    if (LineNumber >= ((int) line.LineNumber - 3) && LineNumber < ((int) line.LineNumber + 5))
-                        _tprintf(_T("%c%4d%s"), LineNumber == line.LineNumber ? _T('*') : _T(' '), LineNumber, linestr);
-                    if (LineNumber >= ((int) line.LineNumber + 5))
-                        break;
-                }
-                fclose(f);
-            }
+            if (line.LineNumber == 0x00f00f00)
+                _tprintf(_T("%s:*unknown*\n"), FIXFILENAME(line.FileName));
             else
-                _ftprintf(stderr, _T(COLOR_ERROR "Error: fopen_s %s %d" COLOR_RETURN "\n"), FIXFILENAME(line.FileName), errno);
+            {
+                _tprintf(_T("%s:%d+%d\n"), FIXFILENAME(line.FileName), line.LineNumber, disp);
+
+                FILE* f = nullptr;
+                _tfopen_s(&f, FIXFILENAME(line.FileName), _T("r"));
+                if (f != nullptr)
+                {
+                    TCHAR linestr[1024];
+                    int LineNumber = 0;
+                    while (_fgetts(linestr, ARRAYSIZE(linestr), f))
+                    {
+                        ++LineNumber;
+                        if (LineNumber >= ((int) line.LineNumber - 3) && LineNumber < ((int) line.LineNumber + 5))
+                            _tprintf(_T("%c%4d%s"), LineNumber == line.LineNumber ? _T('*') : _T(' '), LineNumber, linestr);
+                        if (LineNumber >= ((int) line.LineNumber + 5))
+                            break;
+                    }
+                    fclose(f);
+                }
+                else
+                    _ftprintf(stderr, _T(COLOR_ERROR "Error: fopen_s %s %d" COLOR_RETURN "\n"), FIXFILENAME(line.FileName), errno);
+            }
         }
         else if (args[0] == TEXT("bp"))
         {
@@ -1159,21 +1175,34 @@ DWORD Debugger::OnExceptionDebugEvent(const DEBUG_EVENT& DebugEv, const EXCEPTIO
 
         bool DoUserInputLoop = false;
 
-        if (m_LastCmd == UserCommand::STEP_IN)
+        if (m_LastCmd == UserCommand::STEP_IN || m_LastCmd == UserCommand::STEP_OVER)
         {
-            IMAGEHLP_LINE line = {};
-            line.SizeOfStruct = sizeof(IMAGEHLP_LINE);
-            DWORD disp = 0;
-            //CHECK(SymGetLineFromAddr(hProcess, (DWORD64) ExceptionRecord.ExceptionAddress, &disp, &line), DoUserInputLoop = true)
-            if (!SymGetLineFromAddr(hProcess, (DWORD64) ExceptionRecord.ExceptionAddress, &disp, &line))
-                DoUserInputLoop = true;
+            const STACKFRAME stackframe = GetCurrentStackFrame(hProcess, hThread);
+            if (m_LastCmd == UserCommand::STEP_OVER && m_CurrentFramePtr > stackframe.AddrFrame.Offset)
+            {
+                AddTempBreakpoint(hProcess, stackframe.AddrReturn.Offset, DebugEv.dwThreadId);
+
+                // TODO This wont work correctly for recursive functions
+                // Maybe add call depth to breakpoint or compare SP?
+
+                m_LastCmd = UserCommand::CONT;
+            }
             else
             {
-                if (line.LineNumber == m_CurrentLine.LineNumber
-                    && (FIXFILENAME(line.FileName) == FIXFILENAME(m_CurrentLine.FileName) || _tcscpy_s(FIXFILENAME(line.FileName), MAX_PATH, FIXFILENAME(m_CurrentLine.FileName)) == 0))
-                    AdjustThreadContext(hProcess, hThread, SET_TRAP);
-                else
+                IMAGEHLP_LINE line = {};
+                line.SizeOfStruct = sizeof(IMAGEHLP_LINE);
+                DWORD disp = 0;
+                //CHECK(SymGetLineFromAddr(hProcess, (DWORD64) ExceptionRecord.ExceptionAddress, &disp, &line), DoUserInputLoop = true)
+                if (!SymGetLineFromAddr(hProcess, (DWORD64) ExceptionRecord.ExceptionAddress, &disp, &line))
                     DoUserInputLoop = true;
+                else
+                {
+                    if (line.LineNumber == m_CurrentLine.LineNumber
+                        && (FIXFILENAME(line.FileName) == FIXFILENAME(m_CurrentLine.FileName) || _tcscpy_s(FIXFILENAME(line.FileName), MAX_PATH, FIXFILENAME(m_CurrentLine.FileName)) == 0))
+                        AdjustThreadContext(hProcess, hThread, SET_TRAP);
+                    else
+                        DoUserInputLoop = true;
+                }
             }
         }
 
