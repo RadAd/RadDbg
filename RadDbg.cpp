@@ -634,8 +634,12 @@ Debugger::UserCommand Debugger::UserInputLoop(const DEBUG_EVENT& DebugEv, const 
     const HANDLE hStdIn = GetStdHandle(STD_INPUT_HANDLE);
 
     const HANDLE hProcess = GetProcess(DebugEv.dwProcessId);
+    const HANDLE hEvThread = GetProcess(DebugEv.dwThreadId);
     DWORD dwThreadId = DebugEv.dwThreadId;
     HANDLE hThread = GetThread(dwThreadId);
+
+    std::vector<STACKFRAME> stack = GetCallstack(hProcess, hThread);
+    std::vector<STACKFRAME>::const_iterator itstack = stack.begin();
 
     TCHAR line[1024];
     // TODO Use ReadConsole and trap F? keys to step, next, etc
@@ -684,9 +688,9 @@ Debugger::UserCommand Debugger::UserInputLoop(const DEBUG_EVENT& DebugEv, const 
                 m_CurrentLine.LineNumber = -1;
             }
 
-            AdjustThreadContext(hProcess, hThread, SET_TRAP);
+            AdjustThreadContext(hProcess, hEvThread, SET_TRAP);
 
-            const STACKFRAME stackframe = GetCurrentStackFrame(hProcess, hThread);
+            const STACKFRAME stackframe = GetCurrentStackFrame(hProcess, hEvThread);
             m_CurrentFramePtr = stackframe.AddrFrame.Offset;
 
             return UserCommand::STEP_OVER;
@@ -704,16 +708,16 @@ Debugger::UserCommand Debugger::UserInputLoop(const DEBUG_EVENT& DebugEv, const 
                 m_CurrentLine.LineNumber = -1;
             }
 
-            AdjustThreadContext(hProcess, hThread, SET_TRAP);
+            AdjustThreadContext(hProcess, hEvThread, SET_TRAP);
 
             return UserCommand::STEP_IN;
         }
         else if (args[0] == TEXT("return"))
         {
             // Step-out
-            const STACKFRAME stackframe = GetCurrentStackFrame(hProcess, hThread);
+            const STACKFRAME stackframe = GetCurrentStackFrame(hProcess, hEvThread);
 
-            AddTempBreakpoint(hProcess, stackframe.AddrReturn.Offset, dwThreadId);
+            AddTempBreakpoint(hProcess, stackframe.AddrReturn.Offset, DebugEv.dwThreadId);
 
             // TODO This wont work correctly for recursive functions
             // Maybe add call depth to breakpoint or compare SP?
@@ -781,11 +785,24 @@ Debugger::UserCommand Debugger::UserInputLoop(const DEBUG_EVENT& DebugEv, const 
         }
         else if (args[0] == TEXT("stack"))
         {
-            std::vector<STACKFRAME> stack = GetCallstack(hProcess, hThread);
-            for (const STACKFRAME& s : stack)
+            //for (const STACKFRAME& s : stack)
+            for (auto it = stack.cbegin(); it != stack.cend(); ++it)
             {
+                _tprintf(it == itstack ? _T("* ") : _T("  "));
+                const STACKFRAME& s = *it;
                 ShowStackFrame(hProcess, s.AddrPC.Offset);
             }
+        }
+        else if (args[0] == TEXT("up"))
+        {
+            auto itup = itstack + 1;
+            if (itup != stack.cend())
+                itstack = itup;
+        }
+        else if (args[0] == TEXT("down"))
+        {
+            if (itstack != stack.cbegin())
+                --itstack;
         }
         else if (args[0] == TEXT("mem"))
         {
@@ -912,7 +929,8 @@ Debugger::UserCommand Debugger::UserInputLoop(const DEBUG_EVENT& DebugEv, const 
                     dwThreadId = it->first;
                     hThread = it->second;
 
-                    std::vector<STACKFRAME> stack = GetCallstack(hProcess, hThread);
+                    stack = GetCallstack(hProcess, hThread);
+                    itstack = stack.begin();
 
                     ShowStackFrame(hProcess, stack.front().AddrPC.Offset);
                 }
@@ -976,12 +994,10 @@ Debugger::UserCommand Debugger::UserInputLoop(const DEBUG_EVENT& DebugEv, const 
                 lcContext.ContextFlags = CONTEXT_ALL;
                 CHECK(GetThreadContext(hThread, &lcContext), continue);
 
-                const std::vector<STACKFRAME> stack = GetCallstack(hProcess, hThread);
-
                 LPCTSTR Mask = args.size() >= 2 ? args[1].c_str() : TEXT("*");
 
                 IMAGEHLP_STACK_FRAME imghlp_frame = {};
-                imghlp_frame.InstructionOffset = (ULONG64) stack.front().AddrPC.Offset;
+                imghlp_frame.InstructionOffset = (ULONG64) itstack->AddrPC.Offset;
                 CHECK_IGNORE(SymSetContext(hProcess, &imghlp_frame, nullptr), ERROR_SUCCESS, continue);
 
 #ifdef _M_IX86
@@ -1003,14 +1019,12 @@ Debugger::UserCommand Debugger::UserInputLoop(const DEBUG_EVENT& DebugEv, const 
                 lcContext.ContextFlags = CONTEXT_ALL;
                 CHECK(GetThreadContext(hThread, &lcContext), continue);
 
-                const std::vector<STACKFRAME> stack = GetCallstack(hProcess, hThread);
-
                 std::vector<std::tstring> filter = split(args.size() >= 2 ? args[1] : TEXT("*"), TEXT('.'));
 
                 LPCTSTR Mask = filter.front().c_str();
 
                 IMAGEHLP_STACK_FRAME imghlp_frame = {};
-                imghlp_frame.InstructionOffset = (ULONG64) stack.front().AddrPC.Offset;
+                imghlp_frame.InstructionOffset = (ULONG64) itstack->AddrPC.Offset;
                 CHECK_IGNORE(SymSetContext(hProcess, &imghlp_frame, nullptr), ERROR_SUCCESS, continue);
 
 #ifdef _M_IX86
@@ -1038,13 +1052,10 @@ Debugger::UserCommand Debugger::UserInputLoop(const DEBUG_EVENT& DebugEv, const 
                 lcContext.ContextFlags = CONTEXT_ALL;
                 CHECK(GetThreadContext(hThread, &lcContext), continue);
 
-                std::vector<STACKFRAME> stack = GetCallstack(hProcess, hThread);
-
                 LPCTSTR Mask = args.size() >= 2 ? args[1].c_str() : TEXT("*");
 
                 IMAGEHLP_STACK_FRAME imghlp_frame = {};
-                //imghlp_frame.InstructionOffset = (ULONG64) ExceptionRecord.ExceptionAddress;
-                imghlp_frame.InstructionOffset = (ULONG64) stack.front().AddrPC.Offset;
+                imghlp_frame.InstructionOffset = (ULONG64) itstack->AddrPC.Offset;
                 CHECK_IGNORE(SymSetContext(hProcess, &imghlp_frame, nullptr), ERROR_SUCCESS, continue);
 
 #ifdef _M_IX86
