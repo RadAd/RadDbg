@@ -16,6 +16,8 @@ void ShowError(LPCTSTR msg, DWORD e);
 #define COLOR_PROMPT "\x1b[32m"
 #define COLOR_NAME "\x1b[33m"
 #define COLOR_TYPENAME "\x1b[32m"
+#define COLOR_BREAKPOINT "\x1b[31m"
+#define COLOR_CURRENT "\x1b[33m"
 #define COLOR_RETURN "\x1b[0m"
 
 void ShowAssert(LPCTSTR msg, LPCTSTR file, int line);

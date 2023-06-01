@@ -8,6 +8,7 @@
 #define _NO_CVCONST_H
 #include <DbgHelp.h>
 #include <tlhelp32.h>
+#include <set>
 
 #ifdef _M_IX86
 #ifdef  UNICODE
@@ -634,7 +635,7 @@ Debugger::UserCommand Debugger::UserInputLoop(const DEBUG_EVENT& DebugEv, const 
     const HANDLE hStdIn = GetStdHandle(STD_INPUT_HANDLE);
 
     const HANDLE hProcess = GetProcess(DebugEv.dwProcessId);
-    const HANDLE hEvThread = GetProcess(DebugEv.dwThreadId);
+    const HANDLE hEvThread = GetThread(DebugEv.dwThreadId);
     DWORD dwThreadId = DebugEv.dwThreadId;
     HANDLE hThread = GetThread(dwThreadId);
 
@@ -846,36 +847,53 @@ Debugger::UserCommand Debugger::UserInputLoop(const DEBUG_EVENT& DebugEv, const 
             IMAGEHLP_LINE line = {};
             line.SizeOfStruct = sizeof(IMAGEHLP_LINE);
             DWORD disp = 0;
-            if (!SymGetLineFromAddr(hProcess, (DWORD64) ExceptionRecord.ExceptionAddress, &disp, &line))
+            if (!SymGetLineFromAddr(hProcess, itstack->AddrPC.Offset, &disp, &line))
             {
                 _tprintf(_T("No source data\n"));
                 continue;
             }
+            std::tstring FileName = FIXFILENAME(line.FileName); // line.FileName gets overwritten in call to SymGetLineFromAddr later.
 
             if (line.LineNumber == 0x00f00f00)
-                _tprintf(_T("%s:*unknown*\n"), FIXFILENAME(line.FileName));
+                _tprintf(_T("%s:*unknown*\n"), FileName.c_str());
             else
             {
-                _tprintf(_T("%s:%d+%d\n"), FIXFILENAME(line.FileName), line.LineNumber, disp);
+                std::set<DWORD> breakpointlines;
+                for (const BreakPoint& bp : m_breakpoints)
+                {
+                    IMAGEHLP_LINE bpline = {};
+                    bpline.SizeOfStruct = sizeof(IMAGEHLP_LINE);
+                    DWORD disp = 0;
+                    if (!SymGetLineFromAddr(hProcess, (DWORD64) bp.Address, &disp, &bpline))
+                        continue;
+
+                    if (bpline.FileName == FileName)
+                        breakpointlines.insert(bpline.LineNumber);
+                }
+
+                _tprintf(_T("%s:%d+%d\n"), FileName.c_str(), line.LineNumber, disp);
 
                 FILE* f = nullptr;
-                _tfopen_s(&f, FIXFILENAME(line.FileName), _T("r"));
+                _tfopen_s(&f, FileName.c_str(), _T("r"));
                 if (f != nullptr)
                 {
                     TCHAR linestr[1024];
-                    int LineNumber = 0;
+                    DWORD LineNumber = 0;
                     while (_fgetts(linestr, ARRAYSIZE(linestr), f))
                     {
                         ++LineNumber;
-                        if (LineNumber >= ((int) line.LineNumber - 3) && LineNumber < ((int) line.LineNumber + 5))
-                            _tprintf(_T("%c%4d%s"), LineNumber == line.LineNumber ? _T('*') : _T(' '), LineNumber, linestr);
-                        if (LineNumber >= ((int) line.LineNumber + 5))
+                        if ((LineNumber + 3) >= line.LineNumber && LineNumber < (line.LineNumber + 5))
+                            _tprintf(_T(COLOR_BREAKPOINT "%c" COLOR_CURRENT "%c" COLOR_RETURN "%4d%s"),
+                                breakpointlines.find(LineNumber) != breakpointlines.end() ? _T('*') : _T(' '),
+                                LineNumber == line.LineNumber ? _T('>') : _T(' '),
+                                LineNumber, linestr);
+                        if (LineNumber >= (line.LineNumber + 5))
                             break;
                     }
                     fclose(f);
                 }
                 else
-                    _ftprintf(stderr, _T(COLOR_ERROR "Error: fopen_s %s %d" COLOR_RETURN "\n"), FIXFILENAME(line.FileName), errno);
+                    _ftprintf(stderr, _T(COLOR_ERROR "Error: fopen_s %s %d" COLOR_RETURN "\n"), FileName.c_str(), errno);
             }
         }
         else if (args[0] == TEXT("bp"))
