@@ -853,6 +853,7 @@ Debugger::UserCommand Debugger::UserInputLoop(const DEBUG_EVENT& DebugEv, const 
                 continue;
             }
             std::tstring FileName = FIXFILENAME(line.FileName); // line.FileName gets overwritten in call to SymGetLineFromAddr later.
+            //line.FileName = (PWSTR) FileName.c_str();
 
             if (line.LineNumber == 0x00f00f00)
                 _tprintf(_T("%s:*unknown*\n"), FileName.c_str());
